@@ -16,14 +16,14 @@ export default function UploadPage({ onUploadComplete }: UploadPageProps) {
     setError('');
 
     try {
-      const data = await resumeApi.uploadAndAnalyze(file);
+      const data = await resumeApi.uploadAndPrepareQuestions(file);
 
       // 异步模式：只检查上传是否成功（storage 信息）
       if (!data.storage || !data.storage.resumeId) {
         throw new Error('上传失败，请重试');
       }
 
-      // 上传成功，跳转到简历库（分析在后台进行）
+      // 上传成功，跳转到简历库（面试题在后台准备）。
       onUploadComplete(data.storage.resumeId);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -34,7 +34,7 @@ export default function UploadPage({ onUploadComplete }: UploadPageProps) {
   return (
     <FileUploadCard
       title="开始您的 AI 模拟面试"
-      subtitle="上传 PDF 或 Word 简历，AI 将为您定制专属面试方案"
+      subtitle="上传 PDF 或 Word 简历，系统将在后台准备专属面试题"
       accept=".pdf,.doc,.docx,.txt"
       formatHint="支持 PDF, DOCX, TXT"
       maxSizeHint="最大 10MB"

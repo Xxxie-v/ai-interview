@@ -1,4 +1,6 @@
-import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
+import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import { clearAuth, getAccessToken, getRefreshToken, saveAuth } from '../utils/authStorage';
+import type { TokenPair } from './auth';
 
 /**
  * 后端统一响应结构
@@ -9,11 +11,64 @@ interface Result<T = unknown> {
   data: T;
 }
 
-const baseURL = import.meta.env.PROD ? '' : 'http://localhost:8080';
+// 默认使用同源地址：开发环境交给 Vite 代理，生产环境交给 Nginx 代理。
+// 如需直连独立 API，可通过 VITE_API_BASE_URL 显式覆盖。
+const baseURL = (import.meta.env.VITE_API_BASE_URL as string | undefined)
+  ?.replace(/\/$/, '') || '';
 
 const instance: AxiosInstance = axios.create({
   baseURL,
   timeout: 60000,
+});
+
+interface RetriableRequestConfig extends AxiosRequestConfig {
+  _retry?: boolean;
+}
+
+export class ApiError extends Error {
+  constructor(
+    public readonly code: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+let refreshingPromise: Promise<string | null> | null = null;
+
+async function refreshAccessToken(): Promise<string | null> {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return null;
+  if (!refreshingPromise) {
+    refreshingPromise = axios.post<Result<TokenPair>>(
+      `${baseURL}/api/auth/refresh`, { refreshToken })
+      .then(response => {
+        if (response.data.code !== 200 || !response.data.data) {
+          clearAuth();
+          return null;
+        }
+        saveAuth(response.data.data);
+        return response.data.data.accessToken;
+      })
+      .catch(() => {
+        clearAuth();
+        return null;
+      })
+      .finally(() => {
+        refreshingPromise = null;
+      });
+  }
+  return refreshingPromise;
+}
+
+instance.interceptors.request.use((config) => {
+  const token = getAccessToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
 
 /**
@@ -24,7 +79,7 @@ const instance: AxiosInstance = axios.create({
  * - code !== 200 → 失败，直接显示 message
  */
 instance.interceptors.response.use(
-  (response) => {
+  async (response) => {
     const result = response.data as Result;
     
     // 检查是否是 Result 格式
@@ -34,8 +89,26 @@ instance.interceptors.response.use(
         response.data = result.data;
         return response;
       }
+      if (result.code === 401) {
+        const originalRequest = response.config as RetriableRequestConfig;
+        const isAuthEndpoint = originalRequest.url?.includes('/api/auth/');
+        if (!originalRequest._retry && !isAuthEndpoint) {
+          originalRequest._retry = true;
+          const token = await refreshAccessToken();
+          if (token) {
+            originalRequest.headers = originalRequest.headers || {};
+            originalRequest.headers.Authorization = `Bearer ${token}`;
+            return instance(originalRequest);
+          }
+        }
+        clearAuth();
+        if (!window.location.pathname.startsWith('/login')
+            && !window.location.pathname.startsWith('/register')) {
+          window.location.href = '/login';
+        }
+      }
       // 失败：直接抛出 message
-      return Promise.reject(new Error(result.message || '请求失败'));
+      return Promise.reject(new ApiError(result.code, result.message || '请求失败'));
     }
     
     // 非 Result 格式，直接返回
@@ -48,7 +121,7 @@ instance.interceptors.response.use(
       // 尝试解析 Result 格式
       if (data && typeof data === 'object' && 'code' in data && 'message' in data) {
         const result = data as Result;
-        return Promise.reject(new Error(result.message || '请求失败'));
+        return Promise.reject(new ApiError(result.code, result.message || '请求失败'));
       }
       // 响应格式不对
       return Promise.reject(new Error('请求失败，请重试'));

@@ -67,9 +67,8 @@ public interface InterviewMapper {
      * InterviewSessionEntity 转换为 InterviewDetailDTO
      * 注意：questions, strengths, improvements, referenceAnswers, answers 需要在 Service 层处理
      */
-    @Mapping(target = "status", expression = "java(session.getStatus().toString())")
-    @Mapping(target = "evaluateStatus", expression = "java(session.getEvaluateStatus() != null ? session.getEvaluateStatus().name() : null)")
-    @Mapping(target = "evaluateError", source = "session.evaluateError")
+    @Mapping(target = "executionStatus", expression = "java(session.getStatus().toString())")
+    @Mapping(target = "status", expression = "java(session.getEffectiveReviewStatus())")
     @Mapping(target = "questions", source = "questions")
     @Mapping(target = "strengths", source = "strengths")
     @Mapping(target = "improvements", source = "improvements")
@@ -116,9 +115,7 @@ public interface InterviewMapper {
             session.getSessionId(),
             session.getTotalQuestions(),
             session.getStatus().toString(),
-            session.getEvaluateStatus() != null ? session.getEvaluateStatus().name() : null,
-            session.getEvaluateError(),
-            session.getOverallScore(),
+            session.getEffectiveReviewStatus(),
             session.getCreatedAt(),
             session.getCompletedAt()
         );

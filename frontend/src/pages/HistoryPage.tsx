@@ -1,42 +1,40 @@
 import {useCallback, useEffect, useState} from 'react';
 import {useNavigate} from 'react-router-dom';
 import {AnimatePresence, motion} from 'framer-motion';
-import {AlertCircle, CheckCircle, Clock, FileStack, RefreshCw, Sparkles, Upload} from 'lucide-react';
+import {AlertCircle, CheckCircle, Clock, FileStack, RefreshCw, Upload} from 'lucide-react';
 import {historyApi, ResumeListItem} from '../api/history';
 import DeleteConfirmDialog from '../components/DeleteConfirmDialog';
 import {formatDateOnly} from '../utils/date';
-import {getScoreProgressColor} from '../utils/score';
 import { ROUTES } from '../constants/routes';
 
 interface HistoryListProps {
   onSelectResume: (id: number) => void;
 }
 
-function isAnalyzing(status?: string): boolean {
+function isPreparing(status?: string): boolean {
   return status === 'PENDING' || status === 'PROCESSING';
 }
 
-function AnalyzeStatusIcon({status}: { status?: string }) {
+function QuestionStatusIcon({status}: { status?: string }) {
   if (status === 'FAILED') return <AlertCircle className="w-4 h-4 text-red-500 dark:text-red-400"/>;
-  if (isAnalyzing(status)) return <RefreshCw className="w-4 h-4 text-blue-500 dark:text-blue-400 animate-spin"/>;
+  if (isPreparing(status)) return <RefreshCw className="w-4 h-4 text-blue-500 dark:text-blue-400 animate-spin"/>;
   if (status === 'COMPLETED') return <CheckCircle className="w-4 h-4 text-green-500 dark:text-green-400"/>;
   return <Clock className="w-4 h-4 text-yellow-500 dark:text-yellow-400"/>;
 }
 
-function getAnalyzeStatusText(status?: string): string {
-  if (status === 'FAILED') return '分析失败';
-  if (status === 'PROCESSING') return '分析中';
-  if (status === 'PENDING') return '等待分析';
-  if (status === 'COMPLETED') return '分析完成';
-  return '待分析';
+function getQuestionStatusText(status?: string): string {
+  if (status === 'FAILED') return '解析失败';
+  if (status === 'PROCESSING') return '正在解析';
+  if (status === 'PENDING') return '等待解析';
+  if (status === 'COMPLETED') return '解析完成';
+  return '待解析';
 }
 
 function resumesEqual(a: ResumeListItem[], b: ResumeListItem[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (a[i].id !== b[i].id ||
-        a[i].analyzeStatus !== b[i].analyzeStatus ||
-        a[i].latestScore !== b[i].latestScore) return false;
+        a[i].questionPrepareStatus !== b[i].questionPrepareStatus) return false;
   }
   return true;
 }
@@ -68,14 +66,14 @@ export default function HistoryList({onSelectResume}: HistoryListProps) {
     loadResumes();
   }, [loadResumes]);
 
-  // 轮询：有分析中的简历时启动 3s 轮询
-  const hasAnalyzing = resumes.some(r => isAnalyzing(r.analyzeStatus));
+  // 有正在解析的简历时，每 3 秒刷新一次状态。
+  const hasPreparing = resumes.some(r => isPreparing(r.questionPrepareStatus));
 
   useEffect(() => {
-    if (!hasAnalyzing) return;
+    if (!hasPreparing) return;
     const id = window.setInterval(() => loadResumes(true), 3000);
     return () => clearInterval(id);
-  }, [hasAnalyzing, loadResumes]);
+  }, [hasPreparing, loadResumes]);
 
   const handleDeleteClick = (id: number, filename: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -115,7 +113,7 @@ export default function HistoryList({onSelectResume}: HistoryListProps) {
             <FileStack className="w-7 h-7 text-primary-500" />
             简历管理
           </h1>
-          <p className="text-slate-500 dark:text-slate-400 mt-1">管理您的简历，AI 智能分析与评分</p>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">管理您的简历，上传后只提取并保存简历文本</p>
         </div>
         <div className="flex gap-3">
           <button
@@ -124,13 +122,6 @@ export default function HistoryList({onSelectResume}: HistoryListProps) {
           >
             <Upload className="w-4 h-4" />
             上传简历
-          </button>
-          <button
-            onClick={() => navigate('/interview-hub')}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
-          >
-            <Sparkles className="w-4 h-4" />
-            模拟面试
           </button>
         </div>
       </div>
@@ -173,7 +164,7 @@ export default function HistoryList({onSelectResume}: HistoryListProps) {
         >
           <div className="text-6xl mb-6">📄</div>
           <h3 className="text-xl font-semibold text-slate-700 dark:text-slate-300 mb-2">暂无简历记录</h3>
-          <p className="text-slate-500 dark:text-slate-400">上传简历开始您的第一次 AI 面试分析</p>
+          <p className="text-slate-500 dark:text-slate-400">上传简历后，系统会自动提取简历文本</p>
         </motion.div>
       )}
 
@@ -190,8 +181,8 @@ export default function HistoryList({onSelectResume}: HistoryListProps) {
             <tr className="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-100 dark:border-slate-600">
               <th className="text-left px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">简历名称</th>
               <th className="text-left px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">上传日期</th>
-              <th className="text-left px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">分析状态</th>
-              <th className="text-left px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">AI 评分</th>
+              <th className="text-left px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">解析状态</th>
+              <th className="text-left px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">解析完成时间</th>
               <th className="text-left px-6 py-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">面试状态</th>
               <th className="w-20"></th>
             </tr>
@@ -225,34 +216,18 @@ export default function HistoryList({onSelectResume}: HistoryListProps) {
                   <td className="px-6 py-5 text-slate-500 dark:text-slate-400">{formatDateOnly(resume.uploadedAt)}</td>
                   <td className="px-6 py-5">
                     <div className="flex items-center gap-2">
-                      <AnalyzeStatusIcon status={resume.analyzeStatus}/>
+                      <QuestionStatusIcon status={resume.questionPrepareStatus}/>
                       <span className="text-sm text-slate-600 dark:text-slate-300">
-                        {getAnalyzeStatusText(resume.analyzeStatus)}
+                        {getQuestionStatusText(resume.questionPrepareStatus)}
                       </span>
                     </div>
                   </td>
                   <td className="px-6 py-5">
-                    {resume.analyzeStatus === 'COMPLETED' && resume.latestScore !== undefined ? (
-                      <div className="flex items-center gap-3">
-                        <div
-                          className="w-20 h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
-                          <motion.div
-                            className={`h-full ${getScoreProgressColor(resume.latestScore)} rounded-full`}
-                            initial={{width: 0}}
-                            animate={{width: `${resume.latestScore}%`}}
-                            transition={{duration: 0.8, delay: index * 0.05}}
-                          />
-                        </div>
-                        <span className="font-bold text-slate-800 dark:text-white">{resume.latestScore}</span>
-                      </div>
-                    ) : isAnalyzing(resume.analyzeStatus) ? (
-                      <span className="text-blue-500 dark:text-blue-400 text-sm">生成中...</span>
-                    ) : resume.analyzeStatus === 'FAILED' ? (
-                      <span className="text-red-500 dark:text-red-400 text-sm"
-                            title={resume.analyzeError}>失败</span>
-                    ) : (
-                      <span className="text-slate-400 dark:text-slate-500">-</span>
-                    )}
+                    <span className="text-sm text-slate-500 dark:text-slate-400">
+                      {resume.questionsPreparedAt
+                        ? formatDateOnly(resume.questionsPreparedAt)
+                        : '-'}
+                    </span>
                   </td>
                   <td className="px-6 py-5">
                     {resume.interviewCount > 0 ? (

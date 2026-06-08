@@ -1,7 +1,8 @@
 import {getErrorMessage, request} from './request';
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.PROD ? '' : 'http://localhost:8080';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)
+  ?.replace(/\/$/, '') || '';
 
 // 向量化状态
 export type VectorStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';

@@ -1,7 +1,14 @@
 import { request } from './request';
 
-export type AnalyzeStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+export type QuestionPrepareStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+/** @deprecated Legacy component compatibility; new pages use QuestionPrepareStatus. */
+export type AnalyzeStatus = QuestionPrepareStatus;
 export type EvaluateStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+export type InterviewReviewStatus =
+  | 'INCOMPLETE'
+  | 'UNDER_MANUAL_REVIEW'
+  | 'PASSED'
+  | 'REJECTED';
 
 export interface ResumeListItem {
   id: number;
@@ -9,10 +16,15 @@ export interface ResumeListItem {
   fileSize: number;
   uploadedAt: string;
   accessCount: number;
-  latestScore?: number;
-  lastAnalyzedAt?: string;
   interviewCount: number;
+  questionPrepareStatus?: QuestionPrepareStatus;
+  questionPrepareError?: string;
+  questionsPreparedAt?: string;
+  /** @deprecated No longer returned by the API. */
+  latestScore?: number;
+  /** @deprecated No longer returned by the API. */
   analyzeStatus?: AnalyzeStatus;
+  /** @deprecated No longer returned by the API. */
   analyzeError?: string;
   storageUrl?: string;
 }
@@ -40,12 +52,13 @@ export interface AnalysisItem {
 export interface InterviewItem {
   id: number;
   sessionId: string;
+  jobId?: number | null;
+  jobName?: string | null;
   totalQuestions: number;
-  status: string;
-  evaluateStatus?: EvaluateStatus;
-  evaluateError?: string;
-  overallScore: number | null;
-  overallFeedback: string | null;
+  executionStatus?: string;
+  status: InterviewReviewStatus;
+  overallFeedback?: string | null;
+  overallScore?: number | null;
   createdAt: string;
   completedAt: string | null;
   questions?: unknown[];
@@ -59,7 +72,6 @@ export interface AnswerItem {
   question: string;
   category: string;
   userAnswer: string;
-  score: number;
   feedback: string;
   referenceAnswer?: string;
   keyPoints?: string[];
@@ -75,9 +87,9 @@ export interface ResumeDetail {
   uploadedAt: string;
   accessCount: number;
   resumeText: string;
-  analyzeStatus?: AnalyzeStatus;
-  analyzeError?: string;
-  analyses: AnalysisItem[];
+  questionPrepareStatus?: QuestionPrepareStatus;
+  questionPrepareError?: string;
+  questionsPreparedAt?: string;
   interviews: InterviewItem[];
 }
 
@@ -153,9 +165,9 @@ export const historyApi = {
   },
 
   /**
-   * 重新分析简历
+   * 重新生成简历面试题（保留旧路径以兼容已有客户端）
    */
   async reanalyze(id: number): Promise<void> {
-    return request.post(`/api/resumes/${id}/reanalyze`);
+    return request.post(`/api/resumes/${id}/questions/prepare`);
   },
 };

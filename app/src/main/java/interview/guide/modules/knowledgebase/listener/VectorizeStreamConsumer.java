@@ -97,14 +97,15 @@ public class VectorizeStreamConsumer extends AbstractStreamConsumer<VectorizeStr
     }
 
     @Override
-    protected void retryMessage(VectorizePayload payload, int retryCount) {
+    protected void retryMessage(VectorizePayload payload, int retryCount, String taskId) {
         Long kbId = payload.kbId();
         String content = payload.content();
         try {
             Map<String, String> message = Map.of(
                 AsyncTaskStreamConstants.FIELD_KB_ID, kbId.toString(),
                 AsyncTaskStreamConstants.FIELD_CONTENT, content,
-                AsyncTaskStreamConstants.FIELD_RETRY_COUNT, String.valueOf(retryCount)
+                AsyncTaskStreamConstants.FIELD_RETRY_COUNT, String.valueOf(retryCount),
+                AsyncTaskStreamConstants.FIELD_TASK_ID, taskId
             );
 
             redisService().streamAdd(

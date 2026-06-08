@@ -50,11 +50,10 @@ public interface ResumeMapper {
             resume.getFileSize(),
             resume.getUploadedAt(),
             resume.getAccessCount(),
-            latestScore,
-            lastAnalyzedAt,
             interviewCount,
-            null,
-            null
+            resume.getQuestionPrepareStatus(),
+            resume.getQuestionPrepareError(),
+            resume.getQuestionsPreparedAt()
         );
     }
 
@@ -62,8 +61,6 @@ public interface ResumeMapper {
      * 简化版：从 ResumeEntity 直接映射（其他字段为 null）
      */
     @Mapping(target = "filename", source = "originalFilename")
-    @Mapping(target = "latestScore", ignore = true)
-    @Mapping(target = "lastAnalyzedAt", ignore = true)
     @Mapping(target = "interviewCount", ignore = true)
     ResumeListItemDTO toListItemDTOBasic(ResumeEntity entity);
 
@@ -73,7 +70,6 @@ public interface ResumeMapper {
      * ResumeEntity 转换为 ResumeDetailDTO（不含 analyses 和 interviews）
      */
     @Mapping(target = "filename", source = "originalFilename")
-    @Mapping(target = "analyses", ignore = true)
     @Mapping(target = "interviews", ignore = true)
     ResumeDetailDTO toDetailDTOBasic(ResumeEntity entity);
 

@@ -1,9 +1,10 @@
 import {Link, Outlet, useLocation, useNavigate} from 'react-router-dom';
 import {motion} from 'framer-motion';
-import {Calendar, ChevronRight, Database, FileStack, MessageSquare, Moon, Settings, Sparkles, Sun, Users,} from 'lucide-react';
+import {BriefcaseBusiness, ChevronRight, ClipboardList, Database, FileStack, LogOut, MessageSquare, Moon, Settings, Sparkles, Sun, UserCog, Users,} from 'lucide-react';
 import {useTheme} from '../hooks/useTheme';
-import {useState} from 'react';
-import UnifiedInterviewModal, {UnifiedInterviewConfig} from './UnifiedInterviewModal';
+import {Suspense, useEffect, useState} from 'react';
+import { authApi, type CurrentUser } from '../api/auth';
+import { clearAuth, getRefreshToken, getStoredUser } from '../utils/authStorage';
 
 interface NavItem {
   id: string;
@@ -24,71 +25,68 @@ export default function Layout() {
   const currentPath = location.pathname;
   const {theme, toggleTheme} = useTheme();
   const navigate = useNavigate();
-  const [interviewModalPreset, setInterviewModalPreset] = useState<{
-    defaultMode: 'text' | 'voice';
-    defaultResumeId?: number;
-    title: string;
-    subtitle: string;
-    startButtonText: string;
-  } | null>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => getStoredUser());
+  const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
 
-  const openInterviewModalWithResume = (resumeId: number) => {
-    setInterviewModalPreset({
-      defaultMode: 'text',
-      defaultResumeId: resumeId,
-      title: '开始模拟面试',
-      subtitle: '配置面试参数，开始练习',
-      startButtonText: '开始面试',
-    });
-  };
+  useEffect(() => {
+    const updateUser = () => setCurrentUser(getStoredUser());
+    window.addEventListener('auth:changed', updateUser);
+    return () => window.removeEventListener('auth:changed', updateUser);
+  }, []);
 
-  const handleInterviewStart = (config: UnifiedInterviewConfig) => {
-    setInterviewModalPreset(null);
-    if (config.mode === 'text') {
-      navigate('/interview', {
-        state: {
-          resumeId: config.resumeId,
-          interviewConfig: {
-            skillId: config.skillId,
-            difficulty: config.difficulty,
-            questionCount: config.questionCount,
-            llmProvider: config.llmProvider,
-          },
-        },
-      });
-      return;
+  useEffect(() => {
+    const updateFullscreen = () => setFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+  }, []);
+
+  const handleLogout = async () => {
+    const refreshToken = getRefreshToken();
+    clearAuth();
+    navigate('/login', { replace: true });
+    try {
+      await authApi.logout(refreshToken || undefined);
+    } catch {
+      // local logout has already completed
     }
-
-    const params = new URLSearchParams({
-      skillId: config.skillId,
-      difficulty: config.difficulty,
-    });
-    navigate(`/voice-interview?${params.toString()}`, {
-      state: {
-        voiceConfig: {
-          skillId: config.skillId,
-          difficulty: config.difficulty,
-          techEnabled: true,
-          projectEnabled: true,
-          hrEnabled: true,
-          plannedDuration: config.plannedDuration,
-          resumeId: config.resumeId,
-          llmProvider: config.llmProvider,
-        },
-      },
-    });
   };
 
   // 按业务模块组织的导航项
   const navGroups: NavGroup[] = [
+    ...(currentUser?.roles.includes('ADMIN') ? [{
+      id: 'hr',
+      title: '企业招聘',
+      items: [
+        {
+          id: 'hr-results',
+          path: '/hr/interview-results',
+          label: '正式面试结果',
+          icon: BriefcaseBusiness,
+          description: '查看候选人 AI 面试结果',
+        },
+        {
+          id: 'admin-users',
+          path: '/admin/users',
+          label: '用户与权限',
+          icon: UserCog,
+          description: '启用、禁用或锁定用户账号',
+        },
+        {
+          id: 'admin-recruitment',
+          path: '/admin/recruitment',
+          label: '岗位与面试任务',
+          icon: ClipboardList,
+          description: '维护岗位并向候选人分配任务',
+        },
+      ],
+    }] : []),
     {
       id: 'interview',
       title: '面试准备',
       items: [
         { id: 'resumes', path: '/history', label: '简历管理', icon: FileStack, description: '管理简历，AI 分析' },
-        { id: 'interview-hub', path: '/interview-hub', label: '模拟面试', icon: Sparkles, description: '文字/语音面试练习' },
+        { id: 'jobs', path: '/jobs', label: '招聘岗位', icon: BriefcaseBusiness, description: '选择岗位参加 AI 面试' },
         { id: 'interviews', path: '/interviews', label: '面试记录', icon: Users, description: '查看面试历史' },
-        { id: 'interview-schedule', path: '/interview-schedule', label: '面试日程', icon: Calendar, description: '管理面试安排' },
       ],
     },
     {
@@ -117,22 +115,43 @@ export default function Layout() {
         || currentPath.startsWith('/history/')
         || currentPath === '/upload';
     }
-    if (path === '/interview-hub') {
-      return currentPath === '/interview-hub'
-        || currentPath === '/interview'
-        || currentPath.startsWith('/interview/')
-        || currentPath.startsWith('/voice-interview');
-    }
     if (path === '/knowledgebase') {
       return currentPath === '/knowledgebase' || currentPath === '/knowledgebase/upload';
     }
     return currentPath.startsWith(path);
   };
 
+  const isAdmin = currentUser?.roles.includes('ADMIN');
+  const isAdminOrHr = currentUser?.roles.some(role => role === 'ADMIN' || role === 'HR');
+  const isFullscreenInterview = fullscreen && currentPath === '/interview';
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const timerId = window.setTimeout(() => {
+      void Promise.allSettled([
+        import('../pages/AdminUsersPage').then(module => module.preloadAdminUsersPage()),
+        import('../pages/AdminRecruitmentPage')
+          .then(module => module.preloadAdminRecruitmentPage()),
+        import('../pages/HrInterviewResultsPage')
+          .then(module => module.preloadHrInterviewResultsPage()),
+      ]);
+    }, 300);
+    return () => window.clearTimeout(timerId);
+  }, [isAdmin]);
+
+  const visibleNavGroups = navGroups
+    .map(group => ({
+      ...group,
+      items: group.items.filter(item => isAdminOrHr
+        ? group.id !== 'interview'
+        : ['resumes', 'jobs', 'interviews'].includes(item.id)),
+    }))
+    .filter(group => group.items.length > 0);
+
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50 dark:from-slate-900 dark:to-slate-800">
       {/* 左侧边栏 */}
-      <aside className="w-64 bg-white dark:bg-slate-900 border-r border-slate-100 dark:border-slate-700 fixed h-screen left-0 top-0 z-50 flex flex-col">
+      <aside className={`${isFullscreenInterview ? 'hidden' : 'flex'} w-64 bg-white dark:bg-slate-900 border-r border-slate-100 dark:border-slate-700 fixed h-screen left-0 top-0 z-50 flex-col`}>
         {/* Logo */}
         <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
           <Link to="/history" className="flex items-center gap-3">
@@ -169,7 +188,7 @@ export default function Layout() {
         {/* 导航菜单 */}
         <nav className="flex-1 p-4 overflow-y-auto">
           <div className="space-y-6">
-            {navGroups.map((group) => (
+            {visibleNavGroups.map((group) => (
               <div key={group.id}>
                 <div className="px-3 mb-2">
                   <span className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
@@ -220,6 +239,23 @@ export default function Layout() {
 
         {/* 底部信息 */}
         <div className="p-4 border-t border-slate-100 dark:border-slate-700">
+          {currentUser && (
+            <div className="px-3 py-3 mb-3 rounded-xl bg-slate-50 dark:bg-slate-800">
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200 truncate">
+                {currentUser.username}
+              </p>
+              <p className="text-xs text-slate-400 dark:text-slate-500 truncate">
+                {currentUser.roles.join(', ') || 'USER'}
+              </p>
+              <button
+                onClick={handleLogout}
+                className="mt-3 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-900 hover:text-red-600 dark:hover:text-red-300 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                退出登录
+              </button>
+            </div>
+          )}
           <div className="px-3 py-2 bg-gradient-to-r from-primary-50 to-indigo-50 dark:from-primary-900/30 dark:to-slate-800 rounded-xl">
             <p className="text-xs text-primary-600 dark:text-primary-400 font-medium">AI 面试助手 v1.0</p>
             <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Powered by AI</p>
@@ -228,7 +264,9 @@ export default function Layout() {
       </aside>
 
       {/* 主内容区 */}
-      <main className="flex-1 ml-64 p-10 min-h-screen overflow-y-auto">
+      <main className={`flex-1 min-h-screen overflow-y-auto ${
+        isFullscreenInterview ? 'ml-0 p-6' : 'ml-64 p-10'
+      }`}>
         <motion.div
           key={currentPath}
           initial={{ opacity: 0, y: 20 }}
@@ -236,22 +274,15 @@ export default function Layout() {
           exit={{ opacity: 0, y: -20 }}
           transition={{ duration: 0.3 }}
         >
-          <Outlet context={{ openInterviewModalWithResume }} />
+          <Suspense fallback={(
+            <div className="min-h-[50vh] flex items-center justify-center">
+              <div className="w-9 h-9 border-3 border-slate-200 border-t-primary-500 rounded-full animate-spin" />
+            </div>
+          )}>
+            <Outlet />
+          </Suspense>
         </motion.div>
       </main>
-
-      {/* 统一面试弹窗 */}
-      <UnifiedInterviewModal
-        isOpen={interviewModalPreset !== null}
-        onClose={() => setInterviewModalPreset(null)}
-        onStart={handleInterviewStart}
-        defaultMode={interviewModalPreset?.defaultMode || 'text'}
-        defaultResumeId={interviewModalPreset?.defaultResumeId}
-        hideModeSwitch={interviewModalPreset?.defaultResumeId == null}
-        title={interviewModalPreset?.title || '开始模拟面试'}
-        subtitle={interviewModalPreset?.subtitle || '选择面试模式和主题，快速开始'}
-        startButtonText={interviewModalPreset?.startButtonText || '开始面试'}
-      />
     </div>
   );
 }

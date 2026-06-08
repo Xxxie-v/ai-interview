@@ -6,8 +6,9 @@ import org.springframework.stereotype.Component;
 
 @Data
 @Component
-@ConfigurationProperties(prefix = "app.cors")
-public class CorsProperties {
+@ConfigurationProperties(prefix = "app.auth.admin")
+public class AdminUserProperties {
 
-    private String allowedOrigins = "http://localhost:5173,http://127.0.0.1:5173";
+  private String username = "admin";
+  private String password;
 }

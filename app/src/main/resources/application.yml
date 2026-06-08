@@ -44,8 +44,16 @@ spring:
     # 与根目录 docker-compose.yml 中 postgres 服务默认一致（本地只起依赖容器 + bootRun 时无需改）
     password: ${POSTGRES_PASSWORD:password}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${APP_DB_POOL_MAX_SIZE:10}
+      minimum-idle: ${APP_DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${APP_DB_CONNECTION_TIMEOUT_MS:5000}
+      validation-timeout: ${APP_DB_VALIDATION_TIMEOUT_MS:3000}
+      leak-detection-threshold: ${APP_DB_LEAK_DETECTION_MS:20000}
 
   jpa:
+    # 面试回答会等待外部大模型，禁止 Web 请求在等待期间持有 EntityManager/数据库连接。
+    open-in-view: false
     hibernate:
       ddl-auto: update #首次启动用 create，表创建成功后，改回 update
     show-sql: false
@@ -91,8 +99,10 @@ spring:
 # Application custom configuration
 app:
   ai:
-    default-provider: dashscope
-    default-embedding-provider: dashscope
+    default-provider: ${APP_AI_DEFAULT_PROVIDER:dashscope}
+    default-embedding-provider: ${APP_AI_DEFAULT_EMBEDDING_PROVIDER:dashscope}
+    managed-providers:
+      - dashscope-question
     embedding-dimensions: ${APP_AI_EMBEDDING_DIMENSIONS:1024}
     security:
       api-key-encryption-key: ${APP_AI_CONFIG_ENCRYPTION_KEY:}
@@ -106,11 +116,17 @@ app:
     providers:
       dashscope:
         base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
-        api-key: ${AI_BAILIAN_API_KEY}
+        api-key: ${AI_BAILIAN_API_KEY:}
         model: ${AI_MODEL:qwen3.5-flash}
         embedding-model: text-embedding-v3
         embedding-dimensions: 1024
         supports-embedding: true
+      # 异步出题使用更高质量的模型，避免影响实时追问的响应速度。
+      dashscope-question:
+        base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+        api-key: ${AI_BAILIAN_API_KEY:}
+        model: ${AI_QUESTION_MODEL:qwen3.7-plus}
+        supports-embedding: false
       lmstudio:
         base-url: http://localhost:1234
         api-key: ${PROVIDER_LMSTUDIO_API_KEY:lm-studio}
@@ -138,6 +154,87 @@ app:
         embedding-model: embedding-3
         embedding-dimensions: 1024
         supports-embedding: true
+    router:
+      enabled: ${APP_AI_ROUTER_ENABLED:true}
+      latency-ewma-alpha: ${APP_AI_ROUTER_EWMA_ALPHA:0.2}
+      error-window-size: ${APP_AI_ROUTER_ERROR_WINDOW_SIZE:50}
+      minimum-error-samples: ${APP_AI_ROUTER_MIN_ERROR_SAMPLES:20}
+      open-error-rate: ${APP_AI_ROUTER_OPEN_ERROR_RATE:0.3}
+      open-consecutive-failures: ${APP_AI_ROUTER_OPEN_CONSECUTIVE_FAILURES:5}
+      open-cooldown: ${APP_AI_ROUTER_OPEN_COOLDOWN:PT30S}
+      half-open-max-calls: ${APP_AI_ROUTER_HALF_OPEN_MAX_CALLS:2}
+      half-open-success-threshold: ${APP_AI_ROUTER_HALF_OPEN_SUCCESS_THRESHOLD:2}
+      providers:
+        dashscope:
+          enabled: true
+          supported-tasks: [FOLLOW_UP, QUESTION_GENERATE, REPORT]
+          max-concurrency: 50
+          level: FAST
+          cost-weight: 1.0
+        dashscope-question:
+          enabled: true
+          supported-tasks: [FOLLOW_UP, QUESTION_GENERATE, REPORT]
+          max-concurrency: 30
+          level: STRONG
+          cost-weight: 1.4
+        kimi:
+          enabled: false
+          supported-tasks: [QUESTION_GENERATE, REPORT]
+          max-concurrency: 20
+          level: STRONG
+          cost-weight: 1.2
+        deepseek:
+          enabled: false
+          supported-tasks: [QUESTION_GENERATE, REPORT]
+          max-concurrency: 20
+          level: STRONG
+          cost-weight: 0.8
+        glm:
+          enabled: false
+          supported-tasks: [QUESTION_GENERATE, REPORT]
+          max-concurrency: 20
+          level: STRONG
+          cost-weight: 1.0
+        lmstudio:
+          enabled: false
+          supported-tasks: [FOLLOW_UP, QUESTION_GENERATE]
+          max-concurrency: 4
+          level: FAST
+          cost-weight: 0.1
+      tasks:
+        FOLLOW_UP:
+          preferred-level: FAST
+          total-budget: ${APP_AI_ROUTER_FOLLOW_UP_BUDGET:PT2S}
+          target-latency: PT1.5S
+          minimum-retry-budget: PT0.4S
+          max-provider-attempts: 2
+          max-concurrency: 60
+          latency-weight: 0.5
+          capacity-weight: 0.3
+          health-weight: 0.2
+          cost-weight: 0.0
+        QUESTION_GENERATE:
+          preferred-level: STRONG
+          total-budget: ${APP_AI_ROUTER_QUESTION_BUDGET:PT90S}
+          target-latency: PT8S
+          minimum-retry-budget: PT5S
+          max-provider-attempts: 2
+          max-concurrency: 20
+          latency-weight: 0.2
+          capacity-weight: 0.2
+          health-weight: 0.4
+          cost-weight: 0.2
+        REPORT:
+          preferred-level: STRONG
+          total-budget: ${APP_AI_ROUTER_REPORT_BUDGET:PT2M}
+          target-latency: PT15S
+          minimum-retry-budget: PT10S
+          max-provider-attempts: 2
+          max-concurrency: 20
+          latency-weight: 0.1
+          capacity-weight: 0.2
+          health-weight: 0.4
+          cost-weight: 0.3
     advisors:
       enabled: ${APP_AI_ADVISORS_ENABLED:true}
       tool-call-enabled: ${APP_AI_ADVISORS_TOOL_CALL_ENABLED:true}
@@ -168,8 +265,114 @@ app:
         topk-long: ${APP_AI_RAG_TOPK_LONG:8}
         min-score-short: ${APP_AI_RAG_MIN_SCORE_SHORT:0.18}
         min-score-default: ${APP_AI_RAG_MIN_SCORE_DEFAULT:0.28}
+  auth:
+    admin:
+      username: ${APP_AUTH_ADMIN_USERNAME:admin}
+      password: ${APP_AUTH_ADMIN_PASSWORD:change-me-before-production}
+    jwt:
+      secret: ${APP_AUTH_JWT_SECRET:interview-guide-local-dev-secret-change-me-please-32chars}
+      issuer: ${APP_AUTH_JWT_ISSUER:interview-guide}
+      access-token-ttl: ${APP_AUTH_ACCESS_TOKEN_TTL:PT30M}
+      refresh-token-ttl: ${APP_AUTH_REFRESH_TOKEN_TTL:P14D}
+      identity-encryption-key: ${APP_AUTH_IDENTITY_ENCRYPTION_KEY:}
+    oauth2:
+      state-expiration: ${APP_AUTH_OAUTH2_STATE_EXPIRATION:PT10M}
+      wechat:
+        client-id: ${APP_AUTH_WECHAT_CLIENT_ID:}
+        client-secret: ${APP_AUTH_WECHAT_CLIENT_SECRET:}
+        redirect-uri: ${APP_AUTH_WECHAT_REDIRECT_URI:}
+      qq:
+        client-id: ${APP_AUTH_QQ_CLIENT_ID:}
+        client-secret: ${APP_AUTH_QQ_CLIENT_SECRET:}
+        redirect-uri: ${APP_AUTH_QQ_REDIRECT_URI:}
+  sms:
+    provider: ${APP_SMS_PROVIDER:noop}
+    region-id: ${APP_SMS_REGION_ID:cn-hangzhou}
+    access-key-id: ${APP_SMS_ACCESS_KEY_ID:}
+    access-key-secret: ${APP_SMS_ACCESS_KEY_SECRET:}
+    sign-name: ${APP_SMS_SIGN_NAME:}
+    template-code: ${APP_SMS_TEMPLATE_CODE:}
+    scheme-name: ${APP_SMS_SCHEME_NAME:default}
+    country-code: ${APP_SMS_COUNTRY_CODE:86}
+    code-length: ${APP_SMS_CODE_LENGTH:6}
+    valid-time: ${APP_SMS_VALID_TIME:300}
+    interval: ${APP_SMS_INTERVAL:60}
+    code-type: ${APP_SMS_CODE_TYPE:1}
+    duplicate-policy: ${APP_SMS_DUPLICATE_POLICY:1}
+    noop-code: ${APP_SMS_NOOP_CODE:123456}
+    code-expiration: ${APP_SMS_CODE_EXPIRATION:PT5M}
+    resend-interval: ${APP_SMS_RESEND_INTERVAL:PT60S}
+    ip-window: ${APP_SMS_IP_WINDOW:PT1H}
+    max-sends-per-ip: ${APP_SMS_MAX_SENDS_PER_IP:20}
+    max-attempts: ${APP_SMS_MAX_ATTEMPTS:5}
+    expose-code: ${APP_SMS_EXPOSE_CODE:false}
   interview:
     follow-up-count: ${APP_INTERVIEW_FOLLOW_UP_COUNT:1}
+    dynamic-follow-up-provider: ${APP_INTERVIEW_DYNAMIC_FOLLOW_UP_PROVIDER:dashscope}
+    question-generation-provider: ${APP_INTERVIEW_QUESTION_GENERATION_PROVIDER:dashscope-question}
+    dynamic-evaluation-timeout: ${APP_INTERVIEW_DYNAMIC_EVALUATION_TIMEOUT:PT6S}
+    dynamic-max-total-questions: ${APP_INTERVIEW_DYNAMIC_MAX_TOTAL_QUESTIONS:48}
+    dynamic-max-follow-ups-per-topic: ${APP_INTERVIEW_DYNAMIC_MAX_FOLLOW_UPS_PER_TOPIC:2}
+    dynamic-max-topic-duration: ${APP_INTERVIEW_DYNAMIC_MAX_TOPIC_DURATION:PT4M}
+    dynamic-coverage-threshold: ${APP_INTERVIEW_DYNAMIC_COVERAGE_THRESHOLD:0.75}
+    dynamic-max-stagnant-rounds: ${APP_INTERVIEW_DYNAMIC_MAX_STAGNANT_ROUNDS:2}
+    dynamic-recent-qa-limit: ${APP_INTERVIEW_DYNAMIC_RECENT_QA_LIMIT:2}
+    official-min-questions-per-source: ${APP_INTERVIEW_OFFICIAL_MIN_QUESTIONS_PER_SOURCE:3}
+    official-max-questions-per-source: ${APP_INTERVIEW_OFFICIAL_MAX_QUESTIONS_PER_SOURCE:6}
+    job-fixed-question-count: ${APP_INTERVIEW_JOB_FIXED_QUESTION_COUNT:6}
+    resume-prepared-question-count: ${APP_INTERVIEW_RESUME_PREPARED_QUESTION_COUNT:6}
+    events:
+      retention: ${APP_INTERVIEW_EVENT_RETENTION:PT2H}
+      max-events-per-session: ${APP_INTERVIEW_EVENT_MAX_PER_SESSION:200}
+    video:
+      chunk-duration: ${APP_INTERVIEW_VIDEO_CHUNK_DURATION:PT25S}
+      max-chunk-size: ${APP_INTERVIEW_VIDEO_MAX_CHUNK_SIZE:26214400}
+      retention-days: ${APP_INTERVIEW_VIDEO_RETENTION_DAYS:30}
+      cleanup-cron: ${APP_INTERVIEW_VIDEO_CLEANUP_CRON:0 30 3 * * *}
+      allowed-mime-types:
+        - video/webm
+        - video/webm;codecs=vp8,opus
+        - video/webm;codecs=vp9,opus
+        - video/mp4
+    vision:
+      enabled: ${APP_INTERVIEW_VISION_ENABLED:true}
+      provider: ${APP_INTERVIEW_VISION_PROVIDER:mock}
+      frame-interval: ${APP_INTERVIEW_VISION_FRAME_INTERVAL:PT5S}
+      suspect-frame-interval: ${APP_INTERVIEW_VISION_SUSPECT_FRAME_INTERVAL:PT1S}
+      confirmation-frames: ${APP_INTERVIEW_VISION_CONFIRMATION_FRAMES:3}
+      face-missing-min-duration: ${APP_INTERVIEW_VISION_FACE_MISSING_MIN_DURATION:PT2S}
+      multiple-faces-min-duration: ${APP_INTERVIEW_VISION_MULTIPLE_FACES_MIN_DURATION:PT1S}
+      other-event-min-duration: ${APP_INTERVIEW_VISION_OTHER_EVENT_MIN_DURATION:PT1S}
+      recovery-window: ${APP_INTERVIEW_VISION_RECOVERY_WINDOW:PT2S}
+      state-ttl: ${APP_INTERVIEW_VISION_STATE_TTL:PT4H}
+      max-frame-size: ${APP_INTERVIEW_VISION_MAX_FRAME_SIZE:1048576}
+      event-cooldown: ${APP_INTERVIEW_VISION_EVENT_COOLDOWN:PT30S}
+      low-light-threshold: ${APP_INTERVIEW_VISION_LOW_LIGHT_THRESHOLD:40}
+      mock:
+        face-count: ${APP_INTERVIEW_VISION_MOCK_FACE_COUNT:1}
+        confidence: ${APP_INTERVIEW_VISION_MOCK_CONFIDENCE:0.5}
+      onnx:
+        detector-model: ${APP_INTERVIEW_VISION_SCRFD_MODEL:models/vision/det_10g.onnx}
+        recognition-model: ${APP_INTERVIEW_VISION_ARCFACE_MODEL:models/vision/w600k_r50.onnx}
+        detector-input-size: ${APP_INTERVIEW_VISION_DETECTOR_INPUT_SIZE:640}
+        recognition-input-size: ${APP_INTERVIEW_VISION_RECOGNITION_INPUT_SIZE:112}
+        detection-threshold: ${APP_INTERVIEW_VISION_DETECTION_THRESHOLD:0.5}
+        nms-threshold: ${APP_INTERVIEW_VISION_NMS_THRESHOLD:0.4}
+        identity-threshold: ${APP_INTERVIEW_VISION_IDENTITY_THRESHOLD:0.5}
+        reference-min-confidence: ${APP_INTERVIEW_VISION_REFERENCE_MIN_CONFIDENCE:0.75}
+        reference-ttl: ${APP_INTERVIEW_VISION_REFERENCE_TTL:PT4H}
+    violation:
+      screen-switch-threshold: ${APP_INTERVIEW_VIOLATION_SCREEN_SWITCH_THRESHOLD:3}
+      screen-switch-merge-window: ${APP_INTERVIEW_VIOLATION_SCREEN_SWITCH_MERGE_WINDOW:PT2S}
+      min-anomaly-count: ${APP_INTERVIEW_VIOLATION_MIN_ANOMALY_COUNT:3}
+      max-anomaly-count: ${APP_INTERVIEW_VIOLATION_MAX_ANOMALY_COUNT:5}
+      anomaly-duration-threshold: ${APP_INTERVIEW_VIOLATION_DURATION_THRESHOLD:PT30S}
+      count-weight: ${APP_INTERVIEW_VIOLATION_COUNT_WEIGHT:0.6}
+      duration-weight: ${APP_INTERVIEW_VIOLATION_DURATION_WEIGHT:0.4}
+      risk-threshold: ${APP_INTERVIEW_VIOLATION_RISK_THRESHOLD:0.6}
+      severe-event-weight: ${APP_INTERVIEW_VIOLATION_SEVERE_EVENT_WEIGHT:1.0}
+      face-missing-weight: ${APP_INTERVIEW_VIOLATION_FACE_MISSING_WEIGHT:0.75}
+      low-light-weight: ${APP_INTERVIEW_VIOLATION_LOW_LIGHT_WEIGHT:0.25}
     evaluation:
       batch-size: ${APP_INTERVIEW_EVALUATION_BATCH_SIZE:8}
   resume:
@@ -182,18 +385,30 @@ app:
 
   # RustFS (S3兼容) 存储配置
   storage:
+    provider: ${APP_STORAGE_PROVIDER:local}
+    local-dir: ${APP_STORAGE_LOCAL_DIR:${java.io.tmpdir}/interview-guide/storage}
     endpoint: ${APP_STORAGE_ENDPOINT:http://localhost:9000}
     access-key: ${APP_STORAGE_ACCESS_KEY:minioadmin}
     secret-key: ${APP_STORAGE_SECRET_KEY:minioadmin}
     bucket: ${APP_STORAGE_BUCKET:interview-guide}
     region: ${APP_STORAGE_REGION:us-east-1}
+    path-style-access: ${APP_STORAGE_PATH_STYLE_ACCESS:true}
   
   # CORS配置 - React前端
   cors:
-    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174,http://localhost:80}
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:80}
 
   # Voice interview configuration
   voice-interview:
+    speech:
+      asr-provider: ${APP_VOICE_ASR_PROVIDER:qwen}
+      tts-provider: ${APP_VOICE_TTS_PROVIDER:qwen}
+      mock:
+        transcript: ${APP_VOICE_MOCK_TRANSCRIPT:这是本地模拟语音识别结果，请结合当前问题继续面试。}
+        sample-rate: ${APP_VOICE_MOCK_SAMPLE_RATE:16000}
+        silence-duration-ms: ${APP_VOICE_MOCK_SILENCE_MS:800}
+        energy-threshold: ${APP_VOICE_MOCK_ENERGY_THRESHOLD:500}
+        tts-sample-rate: ${APP_VOICE_MOCK_TTS_SAMPLE_RATE:24000}
     # Phase duration settings (minutes)
     phase:
       intro:
@@ -230,7 +445,7 @@ app:
       asr:
         url: wss://dashscope.aliyuncs.com/api-ws/v1/realtime
         model: qwen3-asr-flash-realtime
-        api-key: ${AI_BAILIAN_API_KEY}
+        api-key: ${AI_BAILIAN_API_KEY:}
         language: zh
         format: pcm
         sample-rate: 16000
@@ -244,7 +459,7 @@ app:
       # 音色列表文档：https://help.aliyun.com/zh/model-studio/qwen-tts-realtime
       tts:
         model: qwen3-tts-flash-realtime
-        api-key: ${AI_BAILIAN_API_KEY}
+        api-key: ${AI_BAILIAN_API_KEY:}
         voice: Cherry
         format: pcm
         sample-rate: 24000

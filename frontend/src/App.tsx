@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import Layout from './components/Layout';
 import { useEffect, useState, Suspense, lazy } from 'react';
 import { historyApi, type InterviewDetail } from './api/history';
@@ -7,6 +7,9 @@ import type { Difficulty } from './components/UnifiedInterviewModal';
 import type { CategoryDTO } from './api/skill';
 import { Loader2 } from 'lucide-react';
 import { ROUTES } from './constants/routes';
+import ProtectedRoute from './components/ProtectedRoute';
+import RoleRoute from './components/RoleRoute';
+import {initializeInterviewUploadRecovery} from './utils/interviewUploadQueue';
 
 // Lazy load components
 const UploadPage = lazy(() => import('./pages/UploadPage'));
@@ -17,11 +20,14 @@ const InterviewHistoryPage = lazy(() => import('./pages/InterviewHistoryPage'));
 const KnowledgeBaseQueryPage = lazy(() => import('./pages/KnowledgeBaseQueryPage'));
 const KnowledgeBaseUploadPage = lazy(() => import('./pages/KnowledgeBaseUploadPage'));
 const KnowledgeBaseManagePage = lazy(() => import('./pages/KnowledgeBaseManagePage'));
-const VoiceInterviewPage = lazy(() => import('./pages/VoiceInterviewPage'));
-const VoiceInterviewEvaluationPage = lazy(() => import('./pages/VoiceInterviewEvaluationPage'));
 const InterviewSchedulePage = lazy(() => import('./pages/InterviewSchedulePage'));
-const InterviewHubPage = lazy(() => import('./pages/InterviewHubPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const AuthPage = lazy(() => import('./pages/AuthPage'));
+const OAuthCallbackPage = lazy(() => import('./pages/OAuthCallbackPage'));
+const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage'));
+const AdminRecruitmentPage = lazy(() => import('./pages/AdminRecruitmentPage'));
+const MyAssignmentsPage = lazy(() => import('./pages/MyAssignmentsPage'));
+const HrInterviewResultsPage = lazy(() => import('./pages/HrInterviewResultsPage'));
 const InterviewDetailPanel = lazy(() => import('./components/InterviewDetailPanel'));
 
 // Loading component
@@ -58,7 +64,6 @@ function HistoryListWrapper() {
 function ResumeDetailWrapper() {
   const { resumeId } = useParams<{ resumeId: string }>();
   const navigate = useNavigate();
-  const { openInterviewModalWithResume } = useOutletContext<{ openInterviewModalWithResume: (resumeId: number) => void }>();
 
   if (!resumeId) {
     return <Navigate to="/history" replace />;
@@ -68,8 +73,8 @@ function ResumeDetailWrapper() {
     navigate('/history');
   };
 
-  const handleStartInterview = (id: number) => {
-    openInterviewModalWithResume(id);
+  const handleStartInterview = (_id: number) => {
+    navigate('/jobs');
   };
 
   return (
@@ -92,10 +97,12 @@ interface InterviewEntryState {
     llmProvider?: string;
     customCategories?: CategoryDTO[];
     jdText?: string;
+    officialInterview?: boolean;
+    jobId?: number;
   };
 }
 
-// 模拟面试包装器
+// 正式面试包装器
 function InterviewWrapper() {
   const { resumeId } = useParams<{ resumeId: string }>();
   const navigate = useNavigate();
@@ -140,6 +147,13 @@ function InterviewWrapper() {
     navigate('/interviews');
   };
 
+  const isFormalEntry = Boolean(
+    entryState.interviewConfig?.officialInterview && entryState.interviewConfig.jobId,
+  ) || Boolean(entryState.sessionIdToResume);
+  if (!isFormalEntry) {
+    return <Navigate to="/jobs" replace />;
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -164,10 +178,17 @@ function InterviewWrapper() {
 }
 
 function App() {
+  useEffect(() => initializeInterviewUploadRecovery(), []);
+
   return (
     <BrowserRouter>
       <Suspense fallback={<Loading />}>
         <Routes>
+          <Route path="/login" element={<AuthPage mode="login" />} />
+          <Route path="/register" element={<AuthPage mode="register" />} />
+          <Route path="/oauth/callback/:provider" element={<OAuthCallbackPage />} />
+
+          <Route element={<ProtectedRoute />}>
           <Route path="/" element={<Layout />}>
             {/* 默认重定向到简历管理页面 */}
             <Route index element={<Navigate to="/history" replace />} />
@@ -181,8 +202,12 @@ function App() {
             {/* 简历详情 */}
             <Route path="history/:resumeId" element={<ResumeDetailWrapper />} />
 
-            {/* 面试中心 */}
-            <Route path="interview-hub" element={<InterviewHubPage />} />
+            <Route path="interview-hub" element={<Navigate to="/jobs" replace />} />
+
+            <Route element={<RoleRoute allowedRoles={['INTERVIEWEE']} />}>
+              <Route path="jobs" element={<MyAssignmentsPage />} />
+              <Route path="my-assignments" element={<Navigate to="/jobs" replace />} />
+            </Route>
 
             {/* 面试记录列表 */}
             <Route path="interviews" element={<InterviewHistoryWrapper />} />
@@ -190,19 +215,15 @@ function App() {
             {/* 面试详情报告 */}
             <Route path="interviews/:sessionId" element={<InterviewDetailPageWrapper />} />
 
-            {/* 模拟面试（通用入口） */}
-            <Route path="interview" element={<InterviewWrapper />} />
-
-            {/* 模拟面试 */}
-            <Route path="interview/:resumeId" element={<InterviewWrapper />} />
-
-            {/* 语音面试 */}
-            <Route path="voice-interview" element={<VoiceInterviewPageWrapper />} />
-
-            {/* 语音面试评估报告 */}
-            <Route path="voice-interview/:sessionId/evaluation" element={<VoiceInterviewEvaluationPage />} />
+            <Route element={<RoleRoute allowedRoles={['INTERVIEWEE']} />}>
+              <Route path="interview" element={<InterviewWrapper />} />
+              <Route path="interview/:resumeId" element={<Navigate to="/jobs" replace />} />
+              <Route path="voice-interview" element={<Navigate to="/jobs" replace />} />
+              <Route path="voice-interview/:sessionId/evaluation" element={<Navigate to="/jobs" replace />} />
+            </Route>
 
             {/* 知识库管理 */}
+            <Route element={<RoleRoute allowedRoles={['ADMIN']} />}>
             <Route path="knowledgebase" element={<KnowledgeBaseManagePageWrapper />} />
 
             {/* 知识库上传 */}
@@ -214,8 +235,19 @@ function App() {
             {/* 设置 */}
             <Route path="settings" element={<SettingsPage />} />
 
+            {/* HR 后台 */}
+            </Route>
+            <Route element={<RoleRoute allowedRoles={['ADMIN']} />}>
+              <Route path="hr/interview-results" element={<HrInterviewResultsPage />} />
+              <Route path="admin/users" element={<AdminUsersPage />} />
+              <Route path="admin/recruitment" element={<AdminRecruitmentPage />} />
+            </Route>
+            <Route element={<RoleRoute allowedRoles={['ADMIN']} />}>
+
             {/* 问答助手（知识库聊天） */}
             <Route path="knowledgebase/chat" element={<KnowledgeBaseQueryPageWrapper />} />
+            </Route>
+          </Route>
           </Route>
 
         </Routes>
@@ -227,7 +259,6 @@ function App() {
 // 面试记录页面包装器
 function InterviewHistoryWrapper() {
   const navigate = useNavigate();
-  const { openInterviewModalWithResume } = useOutletContext<{ openInterviewModalWithResume: (resumeId: number) => void }>();
 
   const handleBack = () => {
     navigate('/history');
@@ -237,15 +268,16 @@ function InterviewHistoryWrapper() {
     navigate(`/interviews/${sessionId}`);
   };
 
-  const handleRestartInterview = (resumeId: number) => {
-    openInterviewModalWithResume(resumeId);
+  const handleContinueInterview = (sessionId: string, jobId: number) => {
+    navigate('/interview', {
+      state: {
+        sessionIdToResume: sessionId,
+        interviewConfig: {officialInterview: true, jobId},
+      },
+    });
   };
 
-  const handleContinueInterview = (sessionId: string) => {
-    navigate('/interview', { state: { sessionIdToResume: sessionId } });
-  };
-
-  return <InterviewHistoryPage onBack={handleBack} onViewInterview={handleViewInterview} onRestartInterview={handleRestartInterview} onContinueInterview={handleContinueInterview} />;
+  return <InterviewHistoryPage onBack={handleBack} onViewInterview={handleViewInterview} onContinueInterview={handleContinueInterview} />;
 }
 
 // 面试详情报告页面包装器
@@ -364,11 +396,6 @@ function KnowledgeBaseUploadPageWrapper() {
   };
 
   return <KnowledgeBaseUploadPage onUploadComplete={handleUploadComplete} onBack={handleBack} />;
-}
-
-// 语音面试页面包装器
-function VoiceInterviewPageWrapper() {
-  return <VoiceInterviewPage />;
 }
 
 export default App;

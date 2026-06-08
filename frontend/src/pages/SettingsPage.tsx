@@ -141,6 +141,9 @@ export default function SettingsPage() {
   const [providers, setProviders] = useState<ProviderItem[]>([]);
   const [defaultProviderId, setDefaultProviderId] = useState('');
   const [defaultEmbeddingProviderId, setDefaultEmbeddingProviderId] = useState('');
+  const [questionGenerationProviderId, setQuestionGenerationProviderId] = useState('');
+  const [questionGenerationProviderDraft, setQuestionGenerationProviderDraft] = useState('');
+  const [savingQuestionProvider, setSavingQuestionProvider] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Modal state
@@ -184,6 +187,11 @@ export default function SettingsPage() {
     [pendingDefaultEmbeddingProviderId, providers],
   );
 
+  const selectedQuestionProvider = useMemo(
+    () => providers.find(provider => provider.id === questionGenerationProviderDraft) ?? null,
+    [providers, questionGenerationProviderDraft],
+  );
+
   // Voice config state
   const [asrConfig, setAsrConfig] = useState<AsrConfig | null>(null);
   const [ttsConfig, setTtsConfig] = useState<TtsConfig | null>(null);
@@ -212,6 +220,10 @@ export default function SettingsPage() {
     defaultEmbeddingProviderId === providerId
   ), [defaultEmbeddingProviderId]);
 
+  const isQuestionGenerationProvider = useCallback((providerId: string) => (
+    questionGenerationProviderId === providerId
+  ), [questionGenerationProviderId]);
+
   const loadData = useCallback(async () => {
     try {
       const [providerList, defaultProvider, asr, tts] = await Promise.all([
@@ -223,6 +235,8 @@ export default function SettingsPage() {
       setProviders(providerList);
       setDefaultProviderId(defaultProvider.defaultProvider);
       setDefaultEmbeddingProviderId(defaultProvider.defaultEmbeddingProvider);
+      setQuestionGenerationProviderId(defaultProvider.questionGenerationProvider);
+      setQuestionGenerationProviderDraft(defaultProvider.questionGenerationProvider);
       setAsrConfig(asr);
       setTtsConfig(tts);
     } catch (err) {
@@ -413,6 +427,7 @@ export default function SettingsPage() {
       await llmProviderApi.updateDefaultProvider({
         defaultProvider: pendingDefaultProviderId,
         defaultEmbeddingProvider: defaultEmbeddingProviderId,
+        questionGenerationProvider: questionGenerationProviderId,
       });
       showToast(`已将 "${pendingDefaultProviderId}" 设为默认聊天服务`);
       setPendingDefaultProviderId(null);
@@ -442,6 +457,7 @@ export default function SettingsPage() {
       await llmProviderApi.updateDefaultEmbeddingProvider({
         defaultProvider: defaultProviderId,
         defaultEmbeddingProvider: pendingDefaultEmbeddingProviderId,
+        questionGenerationProvider: questionGenerationProviderId,
       });
       showToast(`已将 "${pendingDefaultEmbeddingProviderId}" 的 ${pendingEmbeddingProvider?.embeddingModel ?? '向量模型'} (${pendingEmbeddingProvider?.embeddingDimensions ?? 1024}维) 设为默认向量服务`);
       setPendingDefaultEmbeddingProviderId(null);
@@ -451,6 +467,30 @@ export default function SettingsPage() {
       showToast(err instanceof Error ? err.message : '设置默认向量 Provider 失败', 'error');
     } finally {
       setSettingEmbeddingDefault(false);
+    }
+  };
+
+  const handleSaveQuestionGenerationProvider = async () => {
+    if (!questionGenerationProviderDraft) {
+      showToast('请选择出题模型', 'error');
+      return;
+    }
+    setSavingQuestionProvider(true);
+    try {
+      await llmProviderApi.updateQuestionGenerationProvider({
+        defaultProvider: defaultProviderId,
+        defaultEmbeddingProvider: defaultEmbeddingProviderId,
+        questionGenerationProvider: questionGenerationProviderDraft,
+      });
+      setQuestionGenerationProviderId(questionGenerationProviderDraft);
+      showToast(
+        `出题模型已切换为 ${selectedQuestionProvider?.model ?? questionGenerationProviderDraft}`,
+      );
+    } catch (err) {
+      console.error('Failed to update question generation provider:', err);
+      showToast(err instanceof Error ? err.message : '更新出题模型失败', 'error');
+    } finally {
+      setSavingQuestionProvider(false);
     }
   };
 
@@ -595,9 +635,94 @@ export default function SettingsPage() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2">
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className={CARD_CLASS}
+                  >
+                    <div className="mb-4 flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className={ICON_WRAP_CLASS}>
+                          <Settings className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="truncate text-sm font-semibold text-slate-800 dark:text-white">
+                            出题模型
+                          </h3>
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            简历与岗位匹配题
+                          </p>
+                        </div>
+                      </div>
+                      <StatusBadge icon={<Plug className="h-3 w-3" />}>正式面试</StatusBadge>
+                    </div>
+
+                    <div className={DETAILS_CLASS}>
+                      <ConfigRow
+                        label="当前 Provider"
+                        value={selectedQuestionProvider?.id ?? '未选择'}
+                        title={selectedQuestionProvider?.id}
+                        emphasis
+                      />
+                      <ConfigRow
+                        label="实际模型"
+                        value={selectedQuestionProvider?.model ?? '未选择'}
+                        title={selectedQuestionProvider?.model}
+                        emphasis
+                      />
+                      <div className="grid grid-cols-[108px_minmax(0,1fr)] items-center gap-3 rounded-md px-2 py-2 text-xs">
+                        <label className="whitespace-nowrap text-slate-500 dark:text-slate-400">
+                          切换模型
+                        </label>
+                        <select
+                          value={questionGenerationProviderDraft}
+                          onChange={(event) => setQuestionGenerationProviderDraft(event.target.value)}
+                          className="min-w-0 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-700 outline-none transition-shadow focus:border-primary-400 focus:ring-2 focus:ring-primary-500/30 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                        >
+                          <option value="">请选择</option>
+                          {providers.map(provider => (
+                            <option key={provider.id} value={provider.id}>
+                              {provider.model}（{provider.id}）
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <p className="px-2 pt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        仅影响异步出题，不影响实时追问和知识库向量模型。
+                      </p>
+                    </div>
+
+                    <div className={ACTION_BAR_CLASS}>
+                      <button
+                        type="button"
+                        onClick={() => selectedQuestionProvider && openEditModal(selectedQuestionProvider)}
+                        disabled={!selectedQuestionProvider}
+                        className={`${ACTION_BUTTON_CLASS} text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700`}
+                      >
+                        <Edit2 className="h-3.5 w-3.5" />
+                        编辑
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveQuestionGenerationProvider}
+                        disabled={
+                          savingQuestionProvider
+                          || !questionGenerationProviderDraft
+                          || questionGenerationProviderDraft === questionGenerationProviderId
+                        }
+                        className={`${ACTION_BUTTON_CLASS} text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20`}
+                      >
+                        {savingQuestionProvider
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <CheckCircle className="h-3.5 w-3.5" />}
+                        保存设置
+                      </button>
+                    </div>
+                  </motion.div>
                   {providers.map((provider, index) => {
                     const isGlobalDefault = isGlobalDefaultProvider(provider.id);
                     const isEmbeddingDefault = isDefaultEmbeddingProvider(provider.id);
+                    const isQuestionProvider = isQuestionGenerationProvider(provider.id);
                     const canUseEmbedding = provider.supportsEmbedding && !!provider.embeddingModel;
 
                     return (
@@ -624,6 +749,9 @@ export default function SettingsPage() {
                         <div className="flex flex-col items-end gap-1">
                           {isGlobalDefault && (
                             <StatusBadge icon={<Plug className="h-3 w-3" />}>文字默认</StatusBadge>
+                          )}
+                          {isQuestionProvider && (
+                            <StatusBadge icon={<Settings className="h-3 w-3" />}>出题模型</StatusBadge>
                           )}
                           {isEmbeddingDefault && (
                             <StatusBadge icon={<Database className="h-3 w-3" />}>向量默认</StatusBadge>
