@@ -28,11 +28,11 @@ public class ResumeDeleteService {
      * @param id 简历ID
      * @throws interview.guide.common.exception.BusinessException 如果简历不存在
      */
-    public void deleteResume(Long id) {
+    public void deleteResume(Long id, Long ownerUserId) {
         log.info("收到删除简历请求: id={}", id);
         
         // 获取简历信息（用于删除存储文件）
-        ResumeEntity resume = persistenceService.findById(id)
+        ResumeEntity resume = persistenceService.findByIdAndOwnerUserId(id, ownerUserId)
             .orElseThrow(() -> new BusinessException(
                 ErrorCode.RESUME_NOT_FOUND));
         

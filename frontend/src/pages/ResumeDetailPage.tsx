@@ -2,11 +2,10 @@ import {useCallback, useEffect, useState} from 'react';
 import {useLocation} from 'react-router-dom';
 import {AnimatePresence, motion} from 'framer-motion';
 import {historyApi, InterviewDetail, ResumeDetail} from '../api/history';
-import AnalysisPanel from '../components/AnalysisPanel';
 import InterviewPanel from '../components/InterviewPanel';
 import InterviewDetailPanel from '../components/InterviewDetailPanel';
 import {formatDateOnly} from '../utils/date';
-import {CheckSquare, ChevronLeft, Clock, Download, MessageSquare, Mic} from 'lucide-react';
+import {CheckCircle, ChevronLeft, Clock, Download, MessageSquare, Mic, RefreshCw} from 'lucide-react';
 
 interface ResumeDetailPageProps {
   resumeId: number;
@@ -14,20 +13,20 @@ interface ResumeDetailPageProps {
   onStartInterview: (resumeId: number) => void;
 }
 
-type TabType = 'analysis' | 'interview';
+type TabType = 'questions' | 'interview';
 type DetailViewType = 'list' | 'interviewDetail';
 
 export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }: ResumeDetailPageProps) {
   const location = useLocation();
   const [resume, setResume] = useState<ResumeDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<TabType>('analysis');
+  const [activeTab, setActiveTab] = useState<TabType>('questions');
   const [exporting, setExporting] = useState<string | null>(null);
   const [[page, direction], setPage] = useState([0, 0]);
   const [detailView, setDetailView] = useState<DetailViewType>('list');
   const [selectedInterview, setSelectedInterview] = useState<InterviewDetail | null>(null);
   const [loadingInterview, setLoadingInterview] = useState(false);
-  const [reanalyzing, setReanalyzing] = useState(false);
+  const [preparingQuestions, setPreparingQuestions] = useState(false);
 
   // 静默加载数据（用于轮询）
   const loadResumeDetailSilent = useCallback(async () => {
@@ -59,9 +58,8 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
   // 待处理判断：显式的 PENDING/PROCESSING 状态，或状态未定义且无分析结果
   useEffect(() => {
     const isProcessing = resume && (
-      resume.analyzeStatus === 'PENDING' ||
-      resume.analyzeStatus === 'PROCESSING' ||
-      (resume.analyzeStatus === undefined && (!resume.analyses || resume.analyses.length === 0))
+      resume.questionPrepareStatus === 'PENDING'
+      || resume.questionPrepareStatus === 'PROCESSING'
     );
 
     if (isProcessing && !loading) {
@@ -73,16 +71,16 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
     }
   }, [resume, loading, loadResumeDetailSilent]);
 
-  // 重新分析
-  const handleReanalyze = async () => {
+  // 重新解析
+  const handlePrepareQuestions = async () => {
     try {
-      setReanalyzing(true);
+      setPreparingQuestions(true);
       await historyApi.reanalyze(resumeId);
       await loadResumeDetailSilent();
     } catch (err) {
-      console.error('重新分析失败', err);
+      console.error('重新解析失败', err);
     } finally {
-      setReanalyzing(false);
+      setPreparingQuestions(false);
     }
   };
 
@@ -108,25 +106,6 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
       loadAndViewInterview();
     }
   }, [location.state, resume]);
-
-  const handleExportAnalysisPdf = async () => {
-    setExporting('analysis');
-    try {
-      const blob = await historyApi.exportAnalysisPdf(resumeId);
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `简历分析报告_${resume?.filename || resumeId}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      alert('导出失败，请重试');
-    } finally {
-      setExporting(null);
-    }
-  };
 
   const handleExportInterviewPdf = async (sessionId: string) => {
     setExporting(sessionId);
@@ -176,7 +155,7 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
   };
 
   const handleTabChange = (tab: TabType) => {
-    const newPage = tab === 'analysis' ? 0 : 1;
+    const newPage = tab === 'questions' ? 0 : 1;
     setPage([newPage, newPage > page ? 1 : -1]);
     setActiveTab(tab);
     setDetailView('list');
@@ -219,9 +198,8 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
     );
   }
 
-  const latestAnalysis = resume.analyses?.[0];
   const tabs = [
-    { id: 'analysis' as const, label: '简历分析', icon: CheckSquare },
+    { id: 'questions' as const, label: '简历解析', icon: CheckCircle },
     { id: 'interview' as const, label: '面试记录', icon: MessageSquare, count: resume.interviews?.length || 0 },
   ];
 
@@ -330,16 +308,40 @@ export default function ResumeDetailPage({ resumeId, onBack, onStartInterview }:
               exit="exit"
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
             >
-              {activeTab === 'analysis' ? (
-                <AnalysisPanel
-                  analysis={latestAnalysis}
-                  analyzeStatus={resume.analyzeStatus}
-                  analyzeError={resume.analyzeError}
-                  onExport={handleExportAnalysisPdf}
-                  exporting={exporting === 'analysis'}
-                  onReanalyze={handleReanalyze}
-                  reanalyzing={reanalyzing}
-                />
+              {activeTab === 'questions' ? (
+                <div className="rounded-2xl bg-white p-8 shadow-sm dark:bg-slate-800">
+                  <div className="flex items-start justify-between gap-6">
+                    <div>
+                      <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                        简历解析结果
+                      </h3>
+                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                        上传简历后只提取并保存文本；选择岗位后才会结合岗位要求生成面试题。
+                      </p>
+                      <p className="mt-4 font-medium text-slate-700 dark:text-slate-200">
+                        状态：{{
+                          PENDING: '等待解析',
+                          PROCESSING: '正在解析',
+                          COMPLETED: '解析完成',
+                          FAILED: '解析失败',
+                        }[resume.questionPrepareStatus || 'PENDING']}
+                      </p>
+                      {resume.questionPrepareError && (
+                        <p className="mt-2 text-sm text-red-500">{resume.questionPrepareError}</p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handlePrepareQuestions}
+                      disabled={preparingQuestions
+                        || resume.questionPrepareStatus === 'PROCESSING'}
+                      className="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${preparingQuestions ? 'animate-spin' : ''}`} />
+                      重新解析
+                    </button>
+                  </div>
+                </div>
               ) : (
                   <InterviewPanel
                       interviews={resume.interviews || []}

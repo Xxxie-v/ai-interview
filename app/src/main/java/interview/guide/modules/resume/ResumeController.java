@@ -4,6 +4,7 @@ import interview.guide.common.annotation.RateLimit;
 import interview.guide.common.result.Result;
 import interview.guide.modules.resume.model.ResumeDetailDTO;
 import interview.guide.modules.resume.model.ResumeListItemDTO;
+import interview.guide.modules.auth.security.AuthPrincipal;
 import interview.guide.modules.resume.service.ResumeDeleteService;
 import interview.guide.modules.resume.service.ResumeHistoryService;
 import interview.guide.modules.resume.service.ResumeUploadService;
@@ -20,6 +21,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -33,7 +36,7 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequiredArgsConstructor
-@Tag(name = "简历管理", description = "简历上传、分析、导出与删除")
+@Tag(name = "简历管理", description = "简历上传、文本解析与删除")
 public class ResumeController {
 
     private final ResumeUploadService uploadService;
@@ -41,19 +44,23 @@ public class ResumeController {
     private final ResumeHistoryService historyService;
 
     /**
-     * 上传简历并获取分析结果
+     * 上传简历并异步准备面试题。
      *
      * @param file 简历文件（支持PDF、DOCX、DOC、TXT、MD等）
-     * @return 简历分析结果，包含评分和建议
+     * @return 上传结果和文本解析状态
      */
     @PostMapping(value = "/api/resumes/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('INTERVIEWEE')")
     @RateLimit(dimension = RateLimit.Dimension.GLOBAL, count = 5)
     @RateLimit(dimension = RateLimit.Dimension.IP, count = 5)
-    public Result<Map<String, Object>> uploadAndAnalyze(@RequestParam("file") MultipartFile file) {
-        Map<String, Object> result = uploadService.uploadAndAnalyze(file);
+    public Result<Map<String, Object>> uploadAndPrepareQuestions(
+            @RequestParam("file") MultipartFile file,
+            @AuthenticationPrincipal AuthPrincipal principal) {
+        Map<String, Object> result = uploadService.uploadAndPrepareQuestions(
+            file, principal.id());
         boolean isDuplicate = (Boolean) result.get("duplicate");
         if (isDuplicate) {
-            return Result.success("检测到相同简历，已返回历史分析结果", result);
+            return Result.success("检测到相同简历，已返回已有解析结果", result);
         }
         return Result.success(result);
     }
@@ -62,17 +69,22 @@ public class ResumeController {
      * 获取所有简历列表
      */
     @GetMapping("/api/resumes")
-    public Result<List<ResumeListItemDTO>> getAllResumes() {
-        List<ResumeListItemDTO> resumes = historyService.getAllResumes();
+    @PreAuthorize("hasRole('INTERVIEWEE')")
+    public Result<List<ResumeListItemDTO>> getAllResumes(
+            @AuthenticationPrincipal AuthPrincipal principal) {
+        List<ResumeListItemDTO> resumes = historyService.getAllResumes(principal.id());
         return Result.success(resumes);
     }
 
     /**
-     * 获取简历详情（包含分析历史）
+     * 获取简历详情和解析状态。
      */
     @GetMapping("/api/resumes/{id}/detail")
-    public Result<ResumeDetailDTO> getResumeDetail(@PathVariable Long id) {
-        ResumeDetailDTO detail = historyService.getResumeDetail(id);
+    @PreAuthorize("hasRole('INTERVIEWEE') and @resumePermission.isOwner(#id, authentication)")
+    public Result<ResumeDetailDTO> getResumeDetail(
+            @PathVariable Long id,
+            @AuthenticationPrincipal AuthPrincipal principal) {
+        ResumeDetailDTO detail = historyService.getResumeDetail(id, principal.id());
         return Result.success(detail);
     }
 
@@ -80,9 +92,12 @@ public class ResumeController {
      * 导出简历分析报告为PDF
      */
     @GetMapping("/api/resumes/{id}/export")
-    public ResponseEntity<byte[]> exportAnalysisPdf(@PathVariable Long id) {
+    @PreAuthorize("hasRole('INTERVIEWEE') and @resumePermission.isOwner(#id, authentication)")
+    public ResponseEntity<byte[]> exportAnalysisPdf(
+            @PathVariable Long id,
+            @AuthenticationPrincipal AuthPrincipal principal) {
         try {
-            var result = historyService.exportAnalysisPdf(id);
+            var result = historyService.exportAnalysisPdf(id, principal.id());
             String filename = URLEncoder.encode(result.filename(), StandardCharsets.UTF_8);
 
             return ResponseEntity.ok()
@@ -102,23 +117,31 @@ public class ResumeController {
      * @return 删除结果
      */
     @DeleteMapping("/api/resumes/{id}")
-    public Result<Void> deleteResume(@PathVariable Long id) {
-        deleteService.deleteResume(id);
+    @PreAuthorize("hasRole('INTERVIEWEE') and @resumePermission.isOwner(#id, authentication)")
+    public Result<Void> deleteResume(
+            @PathVariable Long id,
+            @AuthenticationPrincipal AuthPrincipal principal) {
+        deleteService.deleteResume(id, principal.id());
         return Result.success(null);
     }
 
     /**
-     * 重新分析简历（手动重试）
-     * 用于分析失败后的重试
+     * 重新生成简历面试题。
      *
      * @param id 简历ID
      * @return 结果
      */
-    @PostMapping("/api/resumes/{id}/reanalyze")
+    @PostMapping({
+        "/api/resumes/{id}/questions/prepare",
+        "/api/resumes/{id}/reanalyze"
+    })
+    @PreAuthorize("hasRole('INTERVIEWEE') and @resumePermission.isOwner(#id, authentication)")
     @RateLimit(dimension = RateLimit.Dimension.GLOBAL, count = 2)
     @RateLimit(dimension = RateLimit.Dimension.IP, count = 2)
-    public Result<Void> reanalyze(@PathVariable Long id) {
-        uploadService.reanalyze(id);
+    public Result<Void> prepareQuestions(
+            @PathVariable Long id,
+            @AuthenticationPrincipal AuthPrincipal principal) {
+        uploadService.reanalyze(id, principal.id());
         return Result.success(null);
     }
 

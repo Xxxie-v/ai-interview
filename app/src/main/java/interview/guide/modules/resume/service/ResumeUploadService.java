@@ -6,8 +6,6 @@ import interview.guide.common.exception.ErrorCode;
 import interview.guide.common.model.AsyncTaskStatus;
 import interview.guide.infrastructure.file.FileStorageService;
 import interview.guide.infrastructure.file.FileValidationService;
-import interview.guide.modules.interview.model.ResumeAnalysisResponse;
-import interview.guide.modules.resume.listener.AnalyzeStreamProducer;
 import interview.guide.modules.resume.model.ResumeEntity;
 import interview.guide.modules.resume.repository.ResumeRepository;
 import lombok.RequiredArgsConstructor;
@@ -17,11 +15,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
 import java.util.Optional;
+import java.time.LocalDateTime;
 
 /**
  * 简历上传服务
  * 处理简历上传、解析的业务逻辑
- * AI 分析改为异步处理，通过 Redis Stream 实现
+ * 上传阶段只负责文件解析、存储和入库，不调用 AI 出题服务。
  */
 @Slf4j
 @Service
@@ -33,7 +32,6 @@ public class ResumeUploadService {
     private final ResumePersistenceService persistenceService;
     private final AppConfigProperties appConfig;
     private final FileValidationService fileValidationService;
-    private final AnalyzeStreamProducer analyzeStreamProducer;
     private final ResumeRepository resumeRepository;
 
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -44,7 +42,9 @@ public class ResumeUploadService {
      * @param file 简历文件
      * @return 上传结果（分析将异步进行）
      */
-    public Map<String, Object> uploadAndAnalyze(org.springframework.web.multipart.MultipartFile file) {
+    public Map<String, Object> uploadAndPrepareQuestions(
+        org.springframework.web.multipart.MultipartFile file,
+        Long ownerUserId) {
         long startTime = System.currentTimeMillis();
 
         // 1. 验证文件
@@ -60,7 +60,7 @@ public class ResumeUploadService {
         validateContentType(contentType);
 
         // 3. 检查简历是否已存在（去重）
-        Optional<ResumeEntity> existingResume = persistenceService.findExistingResume(file);
+        Optional<ResumeEntity> existingResume = persistenceService.findExistingResume(file, ownerUserId);
         if (existingResume.isPresent()) {
             log.info("简历上传处理完成（重复）: {} - 耗时: {}ms",
                 fileName, System.currentTimeMillis() - startTime);
@@ -83,22 +83,28 @@ public class ResumeUploadService {
         log.info("简历已存储到RustFS: {} - 存储耗时: {}ms",
             fileKey, System.currentTimeMillis() - storageStart);
 
-        // 6. 保存简历到数据库（状态为 PENDING）
-        ResumeEntity savedResume = persistenceService.saveResume(file, resumeText, fileKey, fileUrl);
+        // 6. 保存简历到数据库。文本已经在当前请求完成解析，上传阶段不再 AI 出题。
+        ResumeEntity savedResume = persistenceService.saveResume(
+            file, resumeText, ownerUserId, fileKey, fileUrl);
 
-        // 7. 发送分析任务到 Redis Stream（异步处理）
-        analyzeStreamProducer.sendAnalyzeTask(savedResume.getId(), resumeText);
+        savedResume.setAnalyzeStatus(AsyncTaskStatus.COMPLETED);
+        savedResume.setAnalyzeError(null);
+        savedResume.setQuestionPrepareStatus(AsyncTaskStatus.COMPLETED);
+        savedResume.setQuestionPrepareError(null);
+        savedResume.setPreparedQuestionsJson(null);
+        savedResume.setQuestionsPreparedAt(LocalDateTime.now());
+        resumeRepository.save(savedResume);
 
         long totalTime = System.currentTimeMillis() - startTime;
         log.info("简历上传处理完成: {}, resumeId={} - 总耗时: {}ms (解析+存储+入库)",
             fileName, savedResume.getId(), totalTime);
 
-        // 8. 返回结果（状态为 PENDING，前端可轮询获取最新状态）
+        // 7. 返回解析完成状态。岗位匹配题将在用户确定岗位后生成。
         return Map.of(
             "resume", Map.of(
                 "id", savedResume.getId(),
                 "filename", savedResume.getOriginalFilename(),
-                "analyzeStatus", AsyncTaskStatus.PENDING.name()
+                "questionPrepareStatus", AsyncTaskStatus.COMPLETED.name()
             ),
             "storage", Map.of(
                 "fileKey", fileKey,
@@ -133,48 +139,42 @@ public class ResumeUploadService {
      * 处理重复简历
      */
     private Map<String, Object> handleDuplicateResume(ResumeEntity resume) {
-        log.info("检测到重复简历，返回历史分析结果: resumeId={}", resume.getId());
-
-        // 获取历史分析结果
-        Optional<ResumeAnalysisResponse> analysisOpt = persistenceService.getLatestAnalysisAsDTO(resume.getId());
-
-        // 已有分析结果，直接返回
-        // 没有分析结果（可能之前分析失败），返回当前状态
-        return analysisOpt.map(resumeAnalysisResponse -> Map.of(
-                "analysis", resumeAnalysisResponse,
-                "storage", Map.of(
-                        "fileKey", resume.getStorageKey() != null ? resume.getStorageKey() : "",
-                        "fileUrl", resume.getStorageUrl() != null ? resume.getStorageUrl() : "",
-                        "resumeId", resume.getId()
-                ),
-                "duplicate", true
-        )).orElseGet(() -> Map.of(
-                "resume", Map.of(
-                        "id", resume.getId(),
-                        "filename", resume.getOriginalFilename(),
-                        "analyzeStatus", resume.getAnalyzeStatus() != null ? resume.getAnalyzeStatus().name() : AsyncTaskStatus.PENDING.name()
-                ),
-                "storage", Map.of(
-                        "fileKey", resume.getStorageKey() != null ? resume.getStorageKey() : "",
-                        "fileUrl", resume.getStorageUrl() != null ? resume.getStorageUrl() : "",
-                        "resumeId", resume.getId()
-                ),
-                "duplicate", true
-        ));
+        log.info("检测到重复简历，返回已有解析结果: resumeId={}", resume.getId());
+        resume.setAnalyzeStatus(AsyncTaskStatus.COMPLETED);
+        resume.setAnalyzeError(null);
+        resume.setQuestionPrepareStatus(AsyncTaskStatus.COMPLETED);
+        resume.setQuestionPrepareError(null);
+        resume.setPreparedQuestionsJson(null);
+        resume.setQuestionsPreparedAt(
+            resume.getQuestionsPreparedAt() == null ? resume.getUploadedAt() : resume.getQuestionsPreparedAt());
+        resumeRepository.save(resume);
+        return Map.of(
+            "resume", Map.of(
+                "id", resume.getId(),
+                "filename", resume.getOriginalFilename(),
+                "questionPrepareStatus",
+                resume.getQuestionPrepareStatus() != null
+                    ? resume.getQuestionPrepareStatus().name()
+                    : AsyncTaskStatus.COMPLETED.name()),
+            "storage", Map.of(
+                "fileKey", resume.getStorageKey() != null ? resume.getStorageKey() : "",
+                "fileUrl", resume.getStorageUrl() != null ? resume.getStorageUrl() : "",
+                "resumeId", resume.getId()),
+            "duplicate", true);
     }
 
     /**
-     * 重新分析简历（手动重试）
-     * 从数据库获取简历文本并发送分析任务
+     * 重新解析简历（保留旧接口名称以兼容前端）。
      *
      * @param resumeId 简历ID
      */
     @Transactional
-    public void reanalyze(Long resumeId) {
-        ResumeEntity resume = resumeRepository.findById(resumeId)
+    public void reanalyze(Long resumeId, Long ownerUserId) {
+        ResumeEntity resume = resumeRepository.findByIdAndOwnerUserId(resumeId, ownerUserId)
             .orElseThrow(() -> new BusinessException(ErrorCode.RESUME_NOT_FOUND, "简历不存在"));
 
-        log.info("开始重新分析简历: resumeId={}, filename={}", resumeId, resume.getOriginalFilename());
+        log.info("开始重新解析简历: resumeId={}, filename={}",
+            resumeId, resume.getOriginalFilename());
 
         String resumeText = resume.getResumeText();
         if (resumeText == null || resumeText.trim().isEmpty()) {
@@ -187,14 +187,13 @@ public class ResumeUploadService {
             resume.setResumeText(resumeText);
         }
 
-        // 更新状态为 PENDING
-        resume.setAnalyzeStatus(AsyncTaskStatus.PENDING);
+        resume.setAnalyzeStatus(AsyncTaskStatus.COMPLETED);
         resume.setAnalyzeError(null);
+        resume.setQuestionPrepareStatus(AsyncTaskStatus.COMPLETED);
+        resume.setQuestionPrepareError(null);
+        resume.setPreparedQuestionsJson(null);
+        resume.setQuestionsPreparedAt(LocalDateTime.now());
         resumeRepository.save(resume);
-
-        // 发送分析任务到 Stream
-        analyzeStreamProducer.sendAnalyzeTask(resumeId, resumeText);
-
-        log.info("重新分析任务已发送: resumeId={}", resumeId);
+        log.info("简历重新解析完成: resumeId={}, parsedAt={}", resumeId, LocalDateTime.now());
     }
 }

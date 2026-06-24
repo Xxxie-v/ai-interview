@@ -5,7 +5,7 @@ export const resumeApi = {
   /**
    * 上传简历并获取分析结果
    */
-  async uploadAndAnalyze(file: File): Promise<UploadResponse> {
+  async uploadAndPrepareQuestions(file: File): Promise<UploadResponse> {
     const formData = new FormData();
     formData.append('file', file);
     return request.upload<UploadResponse>('/api/resumes/upload', formData);

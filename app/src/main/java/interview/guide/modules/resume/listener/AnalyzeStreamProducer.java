@@ -11,8 +11,7 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 
 /**
- * 简历分析任务生产者
- * 负责发送分析任务到 Redis Stream
+ * 简历出题任务生产者。
  */
 @Slf4j
 @Component
@@ -39,7 +38,7 @@ public class AnalyzeStreamProducer extends AbstractStreamProducer<AnalyzeStreamP
 
     @Override
     protected String taskDisplayName() {
-        return "分析";
+        return "出题";
     }
 
     @Override
@@ -63,17 +62,18 @@ public class AnalyzeStreamProducer extends AbstractStreamProducer<AnalyzeStreamP
 
     @Override
     protected void onSendFailed(AnalyzeTaskPayload payload, String error) {
-        updateAnalyzeStatus(payload.resumeId(), AsyncTaskStatus.FAILED, truncateError(error));
+        updateQuestionStatus(payload.resumeId(), AsyncTaskStatus.FAILED, truncateError(error));
     }
 
     /**
      * 更新分析状态
      */
-    private void updateAnalyzeStatus(Long resumeId, AsyncTaskStatus status, String error) {
+    private void updateQuestionStatus(Long resumeId, AsyncTaskStatus status, String error) {
         resumeRepository.findById(resumeId).ifPresent(resume -> {
-            resume.setAnalyzeStatus(status);
+            resume.setQuestionPrepareStatus(status);
             if (error != null) {
-                resume.setAnalyzeError(error.length() > 500 ? error.substring(0, 500) : error);
+                resume.setQuestionPrepareError(
+                    error.length() > 500 ? error.substring(0, 500) : error);
             }
             resumeRepository.save(resume);
         });

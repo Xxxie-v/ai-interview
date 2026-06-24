@@ -6,7 +6,9 @@ import interview.guide.infrastructure.export.PdfExportService;
 import interview.guide.infrastructure.mapper.InterviewMapper;
 import interview.guide.infrastructure.mapper.ResumeMapper;
 import interview.guide.modules.interview.model.InterviewHistoryItemDTO;
+import interview.guide.modules.interview.model.InterviewSessionEntity;
 import interview.guide.modules.interview.model.ResumeAnalysisResponse;
+import interview.guide.modules.interview.report.service.EnterpriseInterviewReportService;
 import interview.guide.modules.interview.service.InterviewPersistenceService;
 import interview.guide.modules.resume.model.ResumeAnalysisEntity;
 import interview.guide.modules.resume.model.ResumeDetailDTO;
@@ -19,7 +21,6 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -38,26 +39,18 @@ public class ResumeHistoryService {
     private final ObjectMapper objectMapper;
     private final ResumeMapper resumeMapper;
     private final InterviewMapper interviewMapper;
+    private final EnterpriseInterviewReportService enterpriseReportService;
 
     /**
      * 获取所有简历列表
      */
-    public List<ResumeListItemDTO> getAllResumes() {
-        List<ResumeEntity> resumes = resumePersistenceService.findAllResumes();
+    public List<ResumeListItemDTO> getAllResumes(Long ownerUserId) {
+        List<ResumeEntity> resumes = resumePersistenceService.findAllResumes(ownerUserId);
 
         return resumes.stream().map(resume -> {
-            // 获取最新分析结果的分数
-            Integer latestScore = null;
-            LocalDateTime lastAnalyzedAt = null;
-            Optional<ResumeAnalysisEntity> analysisOpt = resumePersistenceService.getLatestAnalysis(resume.getId());
-            if (analysisOpt.isPresent()) {
-                ResumeAnalysisEntity analysis = analysisOpt.get();
-                latestScore = analysis.getOverallScore();
-                lastAnalyzedAt = analysis.getAnalyzedAt();
-            }
-
             // 获取面试次数
-            int interviewCount = interviewPersistenceService.findByResumeId(resume.getId()).size();
+            int interviewCount = interviewPersistenceService.findByResumeId(
+                resume.getId(), ownerUserId).size();
 
             // 使用 MapStruct 映射
             return new ResumeListItemDTO(
@@ -66,11 +59,10 @@ public class ResumeHistoryService {
                 resume.getFileSize(),
                 resume.getUploadedAt(),
                 resume.getAccessCount(),
-                latestScore,
-                lastAnalyzedAt,
                 interviewCount,
-                resume.getAnalyzeStatus(),
-                resume.getAnalyzeError()
+                resume.getQuestionPrepareStatus(),
+                resume.getQuestionPrepareError(),
+                resume.getQuestionsPreparedAt()
             );
         }).toList();
     }
@@ -78,26 +70,23 @@ public class ResumeHistoryService {
     /**
      * 获取简历详情（包含分析历史）
      */
-    public ResumeDetailDTO getResumeDetail(Long id) {
-        Optional<ResumeEntity> resumeOpt = resumePersistenceService.findById(id);
+    public ResumeDetailDTO getResumeDetail(Long id, Long ownerUserId) {
+        Optional<ResumeEntity> resumeOpt = resumePersistenceService.findByIdAndOwnerUserId(
+            id, ownerUserId);
         if (resumeOpt.isEmpty()) {
             throw new BusinessException(ErrorCode.RESUME_NOT_FOUND);
         }
 
         ResumeEntity resume = resumeOpt.get();
 
-        // 获取所有分析记录，使用 MapStruct 批量转换
-        List<ResumeAnalysisEntity> analyses = resumePersistenceService.findAnalysesByResumeId(id);
-        List<ResumeDetailDTO.AnalysisHistoryDTO> analysisHistory = resumeMapper.toAnalysisHistoryDTOList(
-            analyses,
-            this::extractStrengths,
-            this::extractSuggestions
-        );
-
         // 使用 InterviewMapper 转换面试历史
-        List<InterviewHistoryItemDTO> interviewHistory = interviewMapper.toInterviewHistoryList(
-            interviewPersistenceService.findByResumeId(id)
-        );
+        List<InterviewSessionEntity> sessions =
+            interviewPersistenceService.findByResumeId(id, ownerUserId);
+        List<InterviewHistoryItemDTO> interviewHistory = sessions.stream()
+            .map(session -> redactHiddenReport(
+                interviewMapper.toInterviewHistoryItem(session),
+                enterpriseReportService.isCandidateReportVisible(session, ownerUserId)))
+            .toList();
 
         return new ResumeDetailDTO(
             resume.getId(),
@@ -108,11 +97,27 @@ public class ResumeHistoryService {
             resume.getUploadedAt(),
             resume.getAccessCount(),
             resume.getResumeText(),
-            resume.getAnalyzeStatus(),
-            resume.getAnalyzeError(),
-            analysisHistory,
+            resume.getQuestionPrepareStatus(),
+            resume.getQuestionPrepareError(),
+            resume.getQuestionsPreparedAt(),
             interviewHistory
         );
+    }
+
+    private InterviewHistoryItemDTO redactHiddenReport(
+        InterviewHistoryItemDTO item,
+        boolean reportVisible) {
+        if (reportVisible) {
+            return item;
+        }
+        return new InterviewHistoryItemDTO(
+            item.id(),
+            item.sessionId(),
+            item.totalQuestions(),
+            item.executionStatus(),
+            item.status(),
+            item.createdAt(),
+            item.completedAt());
     }
 
     /**
@@ -154,8 +159,9 @@ public class ResumeHistoryService {
     /**
      * 导出简历分析报告为PDF
      */
-    public ExportResult exportAnalysisPdf(Long resumeId) {
-        Optional<ResumeEntity> resumeOpt = resumePersistenceService.findById(resumeId);
+    public ExportResult exportAnalysisPdf(Long resumeId, Long ownerUserId) {
+        Optional<ResumeEntity> resumeOpt = resumePersistenceService.findByIdAndOwnerUserId(
+            resumeId, ownerUserId);
         if (resumeOpt.isEmpty()) {
             throw new BusinessException(ErrorCode.RESUME_NOT_FOUND);
         }

@@ -11,16 +11,20 @@ import java.time.LocalDateTime;
  */
 @Entity
 @Table(name = "resumes", indexes = {
-    @Index(name = "idx_resume_hash", columnList = "fileHash", unique = true)
+    @Index(name = "idx_resume_owner_hash", columnList = "owner_user_id,file_hash", unique = true),
+    @Index(name = "idx_resume_owner_uploaded", columnList = "owner_user_id,uploaded_at")
 })
 public class ResumeEntity {
     
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(name = "owner_user_id", nullable = false)
+    private Long ownerUserId;
     
     // 文件内容的SHA-256哈希值，用于去重
-    @Column(nullable = false, unique = true, length = 64)
+    @Column(nullable = false, length = 64)
     private String fileHash;
     
     // 原始文件名
@@ -63,6 +67,19 @@ public class ResumeEntity {
     // 分析错误信息（失败时记录）
     @Column(length = 500)
     private String analyzeError;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "question_prepare_status", length = 20)
+    private AsyncTaskStatus questionPrepareStatus = AsyncTaskStatus.PENDING;
+
+    @Column(name = "question_prepare_error", length = 500)
+    private String questionPrepareError;
+
+    @Column(name = "prepared_questions_json", columnDefinition = "TEXT")
+    private String preparedQuestionsJson;
+
+    @Column(name = "questions_prepared_at")
+    private LocalDateTime questionsPreparedAt;
     
     @PrePersist
     protected void onCreate() {
@@ -78,6 +95,14 @@ public class ResumeEntity {
     
     public void setId(Long id) {
         this.id = id;
+    }
+
+    public Long getOwnerUserId() {
+        return ownerUserId;
+    }
+
+    public void setOwnerUserId(Long ownerUserId) {
+        this.ownerUserId = ownerUserId;
     }
     
     public String getFileHash() {
@@ -179,5 +204,37 @@ public class ResumeEntity {
 
     public void setAnalyzeError(String analyzeError) {
         this.analyzeError = analyzeError;
+    }
+
+    public AsyncTaskStatus getQuestionPrepareStatus() {
+        return questionPrepareStatus;
+    }
+
+    public void setQuestionPrepareStatus(AsyncTaskStatus questionPrepareStatus) {
+        this.questionPrepareStatus = questionPrepareStatus;
+    }
+
+    public String getQuestionPrepareError() {
+        return questionPrepareError;
+    }
+
+    public void setQuestionPrepareError(String questionPrepareError) {
+        this.questionPrepareError = questionPrepareError;
+    }
+
+    public String getPreparedQuestionsJson() {
+        return preparedQuestionsJson;
+    }
+
+    public void setPreparedQuestionsJson(String preparedQuestionsJson) {
+        this.preparedQuestionsJson = preparedQuestionsJson;
+    }
+
+    public LocalDateTime getQuestionsPreparedAt() {
+        return questionsPreparedAt;
+    }
+
+    public void setQuestionsPreparedAt(LocalDateTime questionsPreparedAt) {
+        this.questionsPreparedAt = questionsPreparedAt;
     }
 }
