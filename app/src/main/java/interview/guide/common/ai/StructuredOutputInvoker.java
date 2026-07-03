@@ -6,6 +6,7 @@ import interview.guide.common.exception.BusinessException;
 import interview.guide.common.exception.ErrorCode;
 import org.slf4j.Logger;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -66,21 +67,98 @@ public class StructuredOutputInvoker {
         String logContext,
         Logger log
     ) {
+        return invoke(
+            chatClient,
+            systemPromptWithFormat,
+            userPrompt,
+            outputConverter,
+            null,
+            errorCode,
+            errorPrefix,
+            logContext,
+            log);
+    }
+
+    public <T> T invoke(
+        ChatClient chatClient,
+        String systemPromptWithFormat,
+        String userPrompt,
+        BeanOutputConverter<T> outputConverter,
+        ChatOptions chatOptions,
+        ErrorCode errorCode,
+        String errorPrefix,
+        String logContext,
+        Logger log
+    ) {
+        return invokeWithAttempts(
+            chatClient,
+            systemPromptWithFormat,
+            userPrompt,
+            outputConverter,
+            chatOptions,
+            errorCode,
+            errorPrefix,
+            logContext,
+            log,
+            maxAttempts);
+    }
+
+    /**
+     * 路由器负责跨 Provider 重试时使用，避免在同一个 Provider 内部重复调用。
+     */
+    public <T> T invokeOnce(
+        ChatClient chatClient,
+        String systemPromptWithFormat,
+        String userPrompt,
+        BeanOutputConverter<T> outputConverter,
+        ChatOptions chatOptions,
+        ErrorCode errorCode,
+        String errorPrefix,
+        String logContext,
+        Logger log
+    ) {
+        return invokeWithAttempts(
+            chatClient,
+            systemPromptWithFormat,
+            userPrompt,
+            outputConverter,
+            chatOptions,
+            errorCode,
+            errorPrefix,
+            logContext,
+            log,
+            1);
+    }
+
+    private <T> T invokeWithAttempts(
+        ChatClient chatClient,
+        String systemPromptWithFormat,
+        String userPrompt,
+        BeanOutputConverter<T> outputConverter,
+        ChatOptions chatOptions,
+        ErrorCode errorCode,
+        String errorPrefix,
+        String logContext,
+        Logger log,
+        int allowedAttempts
+    ) {
         long startNanos = System.nanoTime();
         String contextTag = normalizeContextTag(logContext);
         String securedSystemPrompt = systemPromptWithFormat
             + PromptSecurityConstants.ANTI_INJECTION_INSTRUCTION;
         Exception lastError = null;
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+        for (int attempt = 1; attempt <= allowedAttempts; attempt++) {
             String attemptSystemPrompt = attempt == 1
                 ? securedSystemPrompt
                 : buildRetrySystemPrompt(securedSystemPrompt, lastError);
             try {
-                String content = chatClient.prompt()
+                ChatClient.ChatClientRequestSpec request = chatClient.prompt()
                     .system(attemptSystemPrompt)
-                    .user(userPrompt)
-                    .call()
-                    .content();
+                    .user(userPrompt);
+                if (chatOptions != null) {
+                    request.options(chatOptions);
+                }
+                String content = request.call().content();
                 T result = convertWithRepair(content, outputConverter, logContext, log);
                 recordAttempt(contextTag, STATUS_SUCCESS);
                 recordInvocation(contextTag, STATUS_SUCCESS, startNanos);
@@ -88,12 +166,12 @@ public class StructuredOutputInvoker {
             } catch (Exception e) {
                 lastError = e;
                 recordAttempt(contextTag, STATUS_FAILURE);
-                if (attempt < maxAttempts) {
+                if (attempt < allowedAttempts) {
                     log.warn("{}结构化解析失败，准备重试: attempt={}/{}, error={}",
-                        logContext, attempt, maxAttempts, e.getMessage());
+                        logContext, attempt, allowedAttempts, e.getMessage());
                 } else {
                     log.error("{}结构化解析失败，已达最大重试次数: attempts={}, error={}",
-                        logContext, maxAttempts, e.getMessage());
+                        logContext, allowedAttempts, e.getMessage());
                 }
             }
         }

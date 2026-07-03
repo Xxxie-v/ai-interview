@@ -18,6 +18,17 @@ public final class AsyncTaskStreamConstants {
     public static final String FIELD_RETRY_COUNT = "retryCount";
 
     /**
+     * 全链路任务 ID。重试时保持不变，用于识别重复投递。
+     */
+    public static final String FIELD_TASK_ID = "taskId";
+
+    public static final String FIELD_SOURCE_STREAM = "sourceStream";
+
+    public static final String FIELD_ERROR = "error";
+
+    public static final String FIELD_FAILED_AT = "failedAt";
+
+    /**
      * 文档内容字段
      */
     public static final String FIELD_CONTENT = "content";
@@ -35,9 +46,40 @@ public final class AsyncTaskStreamConstants {
     public static final int BATCH_SIZE = 10;
 
     /**
+     * 每条 Redis Stream 管道启动的并行消费者数量。
+     */
+    public static final int CONSUMER_CONCURRENCY = 10;
+
+    /**
      * 消费者轮询间隔（毫秒）
      */
     public static final long POLL_INTERVAL_MS = 1000;
+
+    /**
+     * Pending 消息超过该时间后允许其他消费者接管。
+     * 需大于单次 LLM 调用的通常耗时，避免正常任务被重复执行。
+     */
+    public static final long PENDING_MIN_IDLE_MS = 300_000;
+
+    /**
+     * Pending 恢复扫描间隔。
+     */
+    public static final long PENDING_RECOVERY_INTERVAL_MS = 30_000;
+
+    /**
+     * 单次恢复最多扫描的批次数，防止积压恢复长期阻塞新消息。
+     */
+    public static final int MAX_RECOVERY_BATCHES = 10;
+
+    /**
+     * 单任务执行锁租约，覆盖大模型调用和数据库状态更新。
+     */
+    public static final long TASK_LOCK_LEASE_MS = 600_000;
+
+    /**
+     * 已完成任务幂等标记保留 7 天。
+     */
+    public static final long COMPLETED_MARKER_TTL_DAYS = 7;
 
     /**
      * Stream 最大长度（自动裁剪旧消息，防止无限增长）
@@ -109,6 +151,17 @@ public final class AsyncTaskStreamConstants {
      * 面试会话ID字段
      */
     public static final String FIELD_SESSION_ID = "sessionId";
+
+    // ========== Interview question preparation Stream ==========
+
+    public static final String INTERVIEW_QUESTION_PREPARE_STREAM_KEY =
+        "interview:question:prepare:stream";
+
+    public static final String INTERVIEW_QUESTION_PREPARE_GROUP_NAME =
+        "interview-question-prepare-group";
+
+    public static final String INTERVIEW_QUESTION_PREPARE_CONSUMER_PREFIX =
+        "interview-question-prepare-consumer-";
 
     // ========== 语音面试评估 Stream 配置 ==========
 

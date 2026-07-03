@@ -65,4 +65,17 @@ class LlmProviderControllerTest {
         assertEquals(200, result.getCode());
         verify(configService).deleteProvider("lmstudio");
     }
+
+    @Test
+    @DisplayName("updateQuestionGenerationProvider 更新独立出题 Provider")
+    void updateQuestionGenerationProviderCallsService() {
+        DefaultProviderDTO request = new DefaultProviderDTO(
+            "dashscope", "dashscope", "dashscope-question");
+        doNothing().when(configService).updateQuestionGenerationProvider(request);
+
+        Result<Void> result = controller.updateQuestionGenerationProvider(request);
+
+        assertEquals(200, result.getCode());
+        verify(configService).updateQuestionGenerationProvider(request);
+    }
 }

@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 import java.util.List;
 
@@ -98,6 +99,15 @@ public class LlmProviderController {
   @RateLimit(dimension = RateLimit.Dimension.GLOBAL, count = 5)
   public Result<Void> updateDefaultEmbeddingProvider(@RequestBody DefaultProviderDTO request) {
     configService.updateDefaultEmbeddingProvider(request);
+    return Result.success();
+  }
+
+  @PutMapping("/question-generation-provider")
+  @PreAuthorize("hasRole('ADMIN')")
+  @RateLimit(dimension = RateLimit.Dimension.GLOBAL, count = 5)
+  public Result<Void> updateQuestionGenerationProvider(
+      @RequestBody DefaultProviderDTO request) {
+    configService.updateQuestionGenerationProvider(request);
     return Result.success();
   }
 

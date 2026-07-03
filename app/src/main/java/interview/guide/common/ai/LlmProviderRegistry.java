@@ -31,6 +31,8 @@ import org.springframework.ai.retry.RetryUtils;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -50,6 +52,9 @@ public class LlmProviderRegistry {
     private final LlmProviderProperties properties;
     private final Map<String, ChatClient> clientCache = new ConcurrentHashMap<>();
     private final Map<String, EmbeddingModel> embeddingModelCache = new ConcurrentHashMap<>();
+    private final Object defaultProviderCacheLock = new Object();
+    private volatile String cachedDefaultChatProviderId;
+    private volatile String cachedDefaultEmbeddingProviderId;
     private final LlmProviderRepository providerRepository;
     private final LlmGlobalSettingRepository globalSettingRepository;
     private final ApiKeyEncryptionService encryptionService;
@@ -119,10 +124,16 @@ public class LlmProviderRegistry {
      * Get a ChatClient for the specified provider, falling back to the default if null or blank.
      */
     public ChatClient getChatClientOrDefault(String providerId) {
-        if (providerId != null && !providerId.isBlank()) {
-            return getChatClient(providerId);
-        }
-        return getDefaultChatClient();
+        return getChatClient(resolveChatProviderId(providerId));
+    }
+
+    /**
+     * Resolve a concrete provider ID without querying the database on the request path.
+     */
+    public String resolveChatProviderId(String providerId) {
+        return (providerId != null && !providerId.isBlank()
+            && !"default".equalsIgnoreCase(providerId))
+            ? providerId : resolveDefaultChatProviderId();
     }
 
     /**
@@ -130,7 +141,7 @@ public class LlmProviderRegistry {
      * 这些场景要求模型一次性返回可解析 JSON，不应混入工具调用消息。
      */
     public ChatClient getPlainChatClient(String providerId) {
-        String id = resolveProviderId(providerId);
+        String id = resolveChatProviderId(providerId);
         return clientCache.computeIfAbsent(id + ":plain", key -> createPlainChatClient(id));
     }
 
@@ -139,7 +150,7 @@ public class LlmProviderRegistry {
      * 不加 Memory Advisor（语音面试手动管理对话历史）。
      */
     public ChatClient getVoiceChatClient(String providerId) {
-        String id = resolveProviderId(providerId);
+        String id = resolveChatProviderId(providerId);
         return clientCache.computeIfAbsent(id + ":voice", key -> createVoiceChatClient(id));
     }
 
@@ -151,6 +162,23 @@ public class LlmProviderRegistry {
         clientCache.clear();
         embeddingModelCache.clear();
         log.info("[LlmProviderRegistry] Cache cleared ({} entries). Next access will re-create clients.", size);
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void warmUpDefaultProviderCache() {
+        refreshDefaultProviderCache();
+        log.info(
+            "[LlmProviderRegistry] Default provider cache warmed: chat={}, embedding={}",
+            cachedDefaultChatProviderId,
+            cachedDefaultEmbeddingProviderId);
+    }
+
+    public void updateCachedDefaultChatProvider(String providerId) {
+        cachedDefaultChatProviderId = providerId;
+    }
+
+    public void updateCachedDefaultEmbeddingProvider(String providerId) {
+        cachedDefaultEmbeddingProviderId = providerId;
     }
 
     public EmbeddingModel getEmbeddingModel(String providerId) {
@@ -209,6 +237,10 @@ public class LlmProviderRegistry {
 
     private OpenAiChatModel buildChatModel(String providerId) {
         ProviderSnapshot config = loadProviderOrThrow(providerId);
+        if (isPlaceholderApiKey(config.apiKey())) {
+            throw new BusinessException(ErrorCode.PROVIDER_CONFIG_READ_FAILED,
+                "Provider '" + providerId + "' 未配置可用的 API Key");
+        }
         log.info("[LlmProviderRegistry] Building ChatModel - Provider: {}, BaseUrl: {}, Model: {}",
                  providerId, config.baseUrl(), config.model());
 
@@ -320,33 +352,46 @@ public class LlmProviderRegistry {
         return Optional.of(advisor);
     }
 
-    private String resolveProviderId(String providerId) {
-        return (providerId != null && !providerId.isBlank())
-            ? providerId : resolveDefaultChatProviderId();
-    }
-
     private String resolveDefaultChatProviderId() {
-        if (globalSettingRepository == null) {
-            return properties.getDefaultProvider();
+        String cached = cachedDefaultChatProviderId;
+        if (!isBlank(cached)) {
+            return cached;
         }
-        return globalSettingRepository.findById(LlmGlobalSettingEntity.SINGLETON_ID)
-            .map(LlmGlobalSettingEntity::getDefaultChatProviderId)
-            .filter(id -> !isBlank(id))
-            .orElse(properties.getDefaultProvider());
+        refreshDefaultProviderCache();
+        return cachedDefaultChatProviderId;
     }
 
     private String resolveDefaultEmbeddingProviderId() {
-        if (globalSettingRepository == null) {
-            return !isBlank(properties.getDefaultEmbeddingProvider())
-                ? properties.getDefaultEmbeddingProvider()
-                : properties.getDefaultProvider();
+        String cached = cachedDefaultEmbeddingProviderId;
+        if (!isBlank(cached)) {
+            return cached;
         }
-        return globalSettingRepository.findById(LlmGlobalSettingEntity.SINGLETON_ID)
-            .map(LlmGlobalSettingEntity::getDefaultEmbeddingProviderId)
-            .filter(id -> !isBlank(id))
-            .orElseGet(() -> !isBlank(properties.getDefaultEmbeddingProvider())
+        refreshDefaultProviderCache();
+        return cachedDefaultEmbeddingProviderId;
+    }
+
+    private void refreshDefaultProviderCache() {
+        synchronized (defaultProviderCacheLock) {
+            String fallbackChat = properties.getDefaultProvider();
+            String fallbackEmbedding = !isBlank(properties.getDefaultEmbeddingProvider())
                 ? properties.getDefaultEmbeddingProvider()
-                : properties.getDefaultProvider());
+                : fallbackChat;
+            if (globalSettingRepository == null) {
+                cachedDefaultChatProviderId = fallbackChat;
+                cachedDefaultEmbeddingProviderId = fallbackEmbedding;
+                return;
+            }
+            Optional<LlmGlobalSettingEntity> setting = globalSettingRepository.findById(
+                LlmGlobalSettingEntity.SINGLETON_ID);
+            cachedDefaultChatProviderId = setting
+                .map(LlmGlobalSettingEntity::getDefaultChatProviderId)
+                .filter(id -> !isBlank(id))
+                .orElse(fallbackChat);
+            cachedDefaultEmbeddingProviderId = setting
+                .map(LlmGlobalSettingEntity::getDefaultEmbeddingProviderId)
+                .filter(id -> !isBlank(id))
+                .orElse(fallbackEmbedding);
+        }
     }
 
     private ProviderSnapshot loadProviderOrThrow(String providerId) {
@@ -392,6 +437,14 @@ public class LlmProviderRegistry {
         return value == null || value.isBlank();
     }
 
+    private boolean isPlaceholderApiKey(String value) {
+        if (isBlank(value)) {
+            return true;
+        }
+        String normalized = value.trim().toLowerCase();
+        return normalized.startsWith("your_") || normalized.contains("api_key_here");
+    }
+
     private Integer resolveEmbeddingDimensions(Integer configuredDimensions) {
         if (configuredDimensions != null && configuredDimensions > 0) {
             return configuredDimensions;
@@ -401,6 +454,9 @@ public class LlmProviderRegistry {
 
     private boolean looksLikeChatModel(String model) {
         String lower = model.toLowerCase();
+        if (lower.contains("embedding")) {
+            return false;
+        }
         return lower.startsWith("glm-")
             || lower.startsWith("deepseek")
             || lower.startsWith("kimi")

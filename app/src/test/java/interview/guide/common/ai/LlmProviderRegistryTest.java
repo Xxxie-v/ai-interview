@@ -3,6 +3,10 @@ package interview.guide.common.ai;
 import interview.guide.common.config.LlmProviderProperties;
 import interview.guide.common.config.LlmProviderProperties.ProviderConfig;
 import interview.guide.common.exception.BusinessException;
+import interview.guide.modules.llmprovider.model.LlmGlobalSettingEntity;
+import interview.guide.modules.llmprovider.repository.LlmGlobalSettingRepository;
+import interview.guide.modules.llmprovider.repository.LlmProviderRepository;
+import interview.guide.modules.llmprovider.service.ApiKeyEncryptionService;
 import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -17,6 +21,7 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -86,6 +91,36 @@ class LlmProviderRegistryTest {
 
         // Then
         assertSame(client1, client2, "Clients should be cached and returned as the same instance");
+    }
+
+    @Test
+    @DisplayName("Default provider is loaded from database once and then served from memory")
+    void defaultProviderIdIsCached() {
+        LlmProviderRepository providerRepository = mock(LlmProviderRepository.class);
+        LlmGlobalSettingRepository globalSettingRepository =
+            mock(LlmGlobalSettingRepository.class);
+        ApiKeyEncryptionService encryptionService = mock(ApiKeyEncryptionService.class);
+        LlmGlobalSettingEntity setting = LlmGlobalSettingEntity.builder()
+            .id(LlmGlobalSettingEntity.SINGLETON_ID)
+            .defaultChatProviderId("dashscope")
+            .defaultEmbeddingProviderId("dashscope")
+            .build();
+        when(globalSettingRepository.findById(LlmGlobalSettingEntity.SINGLETON_ID))
+            .thenReturn(Optional.of(setting));
+
+        LlmProviderRegistry databaseRegistry = new LlmProviderRegistry(
+            properties,
+            providerRepository,
+            globalSettingRepository,
+            encryptionService,
+            null,
+            null,
+            null);
+
+        assertEquals("dashscope", databaseRegistry.resolveChatProviderId(null));
+        assertEquals("dashscope", databaseRegistry.resolveChatProviderId("default"));
+        verify(globalSettingRepository, times(1))
+            .findById(LlmGlobalSettingEntity.SINGLETON_ID);
     }
 
     @Test
@@ -196,6 +231,15 @@ class LlmProviderRegistryTest {
         @DisplayName("空白 providerId 回退到默认 provider")
         void blankProviderFallsBackToDefault() {
             ChatClient client = registry.getChatClientOrDefault("   ");
+
+            assertNotNull(client);
+            assertSame(client, registry.getChatClient("dashscope"));
+        }
+
+        @Test
+        @DisplayName("历史 default providerId 回退到默认 provider")
+        void legacyDefaultProviderFallsBackToDefault() {
+            ChatClient client = registry.getChatClientOrDefault("default");
 
             assertNotNull(client);
             assertSame(client, registry.getChatClient("dashscope"));

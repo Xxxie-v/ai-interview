@@ -19,6 +19,7 @@ import interview.guide.modules.llmprovider.model.LlmGlobalSettingEntity;
 import interview.guide.modules.llmprovider.model.LlmProviderEntity;
 import interview.guide.modules.llmprovider.repository.LlmGlobalSettingRepository;
 import interview.guide.modules.llmprovider.repository.LlmProviderRepository;
+import interview.guide.modules.interview.service.InterviewQuestionProperties;
 import interview.guide.modules.voiceinterview.config.VoiceInterviewProperties;
 import interview.guide.modules.voiceinterview.service.QwenAsrService;
 import interview.guide.modules.voiceinterview.service.QwenTtsService;
@@ -28,6 +29,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
@@ -64,6 +67,7 @@ public class LlmProviderConfigService {
   private final VoiceInterviewProperties voiceProperties;
   private final QwenAsrService asrService;
   private final QwenTtsService ttsService;
+  private final InterviewQuestionProperties interviewQuestionProperties;
 
   private static final Map<String, String> RECOMMENDED_EMBEDDING_MODELS = Map.of(
       "dashscope", "text-embedding-v3",
@@ -82,7 +86,8 @@ public class LlmProviderConfigService {
       ApiKeyEncryptionService encryptionService,
       VoiceInterviewProperties voiceProperties,
       QwenAsrService asrService,
-      QwenTtsService ttsService) {
+      QwenTtsService ttsService,
+      InterviewQuestionProperties interviewQuestionProperties) {
     this.properties = properties;
     this.registry = registry;
     this.providerRepository = providerRepository;
@@ -93,6 +98,7 @@ public class LlmProviderConfigService {
     this.voiceProperties = voiceProperties;
     this.asrService = asrService;
     this.ttsService = ttsService;
+    this.interviewQuestionProperties = interviewQuestionProperties;
   }
 
   public LlmProviderConfigService(
@@ -101,7 +107,16 @@ public class LlmProviderConfigService {
       VoiceInterviewProperties voiceProperties,
       QwenAsrService asrService,
       QwenTtsService ttsService) {
-    this(properties, registry, null, null, null, voiceProperties, asrService, ttsService);
+    this(
+        properties,
+        registry,
+        null,
+        null,
+        null,
+        voiceProperties,
+        asrService,
+        ttsService,
+        new InterviewQuestionProperties());
   }
 
   @PostConstruct
@@ -218,12 +233,16 @@ public class LlmProviderConfigService {
     rwLock.readLock().lock();
     try {
       if (!isDatabaseBacked()) {
-        return new DefaultProviderDTO(properties.getDefaultProvider(), properties.getDefaultEmbeddingProvider());
+        return new DefaultProviderDTO(
+            properties.getDefaultProvider(),
+            properties.getDefaultEmbeddingProvider(),
+            interviewQuestionProperties.getQuestionGenerationProvider());
       }
       LlmGlobalSettingEntity setting = getGlobalSettingOrThrow();
       return new DefaultProviderDTO(
           setting.getDefaultChatProviderId(),
-          setting.getDefaultEmbeddingProviderId());
+          setting.getDefaultEmbeddingProviderId(),
+          resolveQuestionGenerationProvider(setting));
     } finally {
       rwLock.readLock().unlock();
     }
@@ -422,7 +441,9 @@ public class LlmProviderConfigService {
         return;
       }
       LlmGlobalSettingEntity setting = getGlobalSettingOrThrow();
-      if (id.equals(setting.getDefaultChatProviderId()) || id.equals(setting.getDefaultEmbeddingProviderId())) {
+      if (id.equals(setting.getDefaultChatProviderId())
+          || id.equals(setting.getDefaultEmbeddingProviderId())
+          || id.equals(resolveQuestionGenerationProvider(setting))) {
         throw new BusinessException(ErrorCode.PROVIDER_DEFAULT_CANNOT_DELETE,
             "默认 Provider '" + id + "' 不可删除，请先切换默认 Provider");
       }
@@ -452,7 +473,10 @@ public class LlmProviderConfigService {
       LlmGlobalSettingEntity setting = getGlobalSettingOrThrow();
       setting.setDefaultChatProviderId(providerId);
       globalSettingRepository.save(setting);
-      registry.reload();
+      afterCommit(() -> {
+        registry.updateCachedDefaultChatProvider(providerId);
+        registry.reload();
+      });
       log.info("Updated default provider: {}", providerId);
     } finally {
       rwLock.writeLock().unlock();
@@ -481,8 +505,38 @@ public class LlmProviderConfigService {
       LlmGlobalSettingEntity setting = getGlobalSettingOrThrow();
       setting.setDefaultEmbeddingProviderId(providerId);
       globalSettingRepository.save(setting);
-      registry.reload();
+      afterCommit(() -> {
+        registry.updateCachedDefaultEmbeddingProvider(providerId);
+        registry.reload();
+      });
       log.info("Updated default embedding provider: {}", providerId);
+    } finally {
+      rwLock.writeLock().unlock();
+    }
+  }
+
+  @Transactional
+  public void updateQuestionGenerationProvider(DefaultProviderDTO request) {
+    rwLock.writeLock().lock();
+    try {
+      String providerId = trimOrNull(request.questionGenerationProvider());
+      if (providerId == null) {
+        throw new BusinessException(
+            ErrorCode.BAD_REQUEST, "questionGenerationProvider 不能为空");
+      }
+      if (!isDatabaseBacked()) {
+        getLegacyProviderConfigOrThrow(providerId);
+        interviewQuestionProperties.setQuestionGenerationProvider(providerId);
+        writeQuestionGenerationProviderToYaml(providerId);
+        registry.reload();
+        return;
+      }
+      getProviderEntityOrThrow(providerId);
+      LlmGlobalSettingEntity setting = getGlobalSettingOrThrow();
+      setting.setQuestionGenerationProviderId(providerId);
+      globalSettingRepository.save(setting);
+      registry.reload();
+      log.info("Updated question generation provider: {}", providerId);
     } finally {
       rwLock.writeLock().unlock();
     }
@@ -640,7 +694,8 @@ public class LlmProviderConfigService {
   }
 
   private void deleteProviderLegacy(String id) {
-    if (id.equals(properties.getDefaultProvider())) {
+    if (id.equals(properties.getDefaultProvider())
+        || id.equals(interviewQuestionProperties.getQuestionGenerationProvider())) {
       throw new BusinessException(ErrorCode.PROVIDER_DEFAULT_CANNOT_DELETE,
           "默认 Provider '" + id + "' 不可删除，请先切换默认 Provider");
     }
@@ -660,7 +715,23 @@ public class LlmProviderConfigService {
     getLegacyProviderConfigOrThrow(providerId);
     properties.setDefaultProvider(providerId);
     writeDefaultProviderToYaml(providerId);
-    registry.reload();
+    afterCommit(() -> {
+      registry.updateCachedDefaultChatProvider(providerId);
+      registry.reload();
+    });
+  }
+
+  private void afterCommit(Runnable action) {
+    if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+      action.run();
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override
+      public void afterCommit() {
+        action.run();
+      }
+    });
   }
 
   private ProviderRuntimeConfig toRuntimeConfig(ProviderConfig config) {
@@ -685,6 +756,13 @@ public class LlmProviderConfigService {
     return globalSettingRepository.findById(LlmGlobalSettingEntity.SINGLETON_ID)
         .orElseThrow(() -> new BusinessException(ErrorCode.PROVIDER_CONFIG_READ_FAILED,
             "默认 Provider 配置未初始化"));
+  }
+
+  private String resolveQuestionGenerationProvider(LlmGlobalSettingEntity setting) {
+    String configured = trimOrNull(setting.getQuestionGenerationProviderId());
+    return configured != null
+        ? configured
+        : interviewQuestionProperties.getQuestionGenerationProvider();
   }
 
   private ProviderRuntimeConfig getProviderRuntimeConfigOrThrow(String id) {
@@ -796,6 +874,9 @@ public class LlmProviderConfigService {
 
   private boolean looksLikeChatModel(String model) {
     String lower = model.toLowerCase();
+    if (lower.contains("embedding")) {
+      return false;
+    }
     return lower.startsWith("glm-")
         || lower.startsWith("deepseek")
         || lower.startsWith("kimi")
@@ -924,6 +1005,12 @@ public class LlmProviderConfigService {
       editor.setScalar(new String[]{"app", "ai", "default-provider"}, defaultProvider);
       editor.removeSection(new String[]{"app", "ai"}, "module-defaults");
     });
+  }
+
+  private void writeQuestionGenerationProviderToYaml(String providerId) {
+    mutateYamlText(ErrorCode.PROVIDER_CONFIG_WRITE_FAILED, "写入出题 Provider 配置失败", editor ->
+        editor.setScalar(
+            new String[]{"app", "interview", "question-generation-provider"}, providerId));
   }
 
   private void writeAsrConfigToYaml(VoiceInterviewProperties.AsrConfig asr) {

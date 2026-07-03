@@ -41,6 +41,7 @@ export interface ProviderTestResult {
 export interface DefaultProvider {
   defaultProvider: string;
   defaultEmbeddingProvider: string;
+  questionGenerationProvider: string;
 }
 
 export interface AsrConfig {

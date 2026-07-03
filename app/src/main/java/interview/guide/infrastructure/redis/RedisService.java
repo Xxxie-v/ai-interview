@@ -13,8 +13,10 @@ import org.redisson.api.RMap;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.options.KeysScanOptions;
+import org.redisson.api.stream.AutoClaimResult;
 import org.redisson.api.stream.StreamAddArgs;
 import org.redisson.api.stream.StreamCreateGroupArgs;
+import org.redisson.api.stream.StreamGroup;
 import org.redisson.api.stream.StreamMessageId;
 import org.redisson.api.stream.StreamReadGroupArgs;
 import org.redisson.client.codec.StringCodec;
@@ -266,6 +268,46 @@ public class RedisService {
     }
 
     /**
+     * 接管长时间未确认的 Pending 消息，用于消费者宕机后的任务恢复。
+     *
+     * @return 本次认领结果，包含下次扫描游标与认领数量
+     */
+    public StreamClaimBatch streamAutoClaimMessages(
+            String streamKey,
+            String groupName,
+            String consumerName,
+            long minIdleMs,
+            StreamMessageId startId,
+            int count,
+            StreamMessageProcessor processor) {
+        RStream<String, String> stream = redissonClient.getStream(streamKey, StringCodec.INSTANCE);
+        AutoClaimResult<String, String> result = stream.autoClaim(
+            groupName,
+            consumerName,
+            minIdleMs,
+            TimeUnit.MILLISECONDS,
+            startId,
+            count
+        );
+        Map<StreamMessageId, Map<String, String>> messages = result.getMessages();
+        for (Map.Entry<StreamMessageId, Map<String, String>> entry : messages.entrySet()) {
+            processor.process(entry.getKey(), entry.getValue());
+        }
+        return new StreamClaimBatch(
+            result.getNextId(),
+            messages.size(),
+            result.getDeletedIds().size()
+        );
+    }
+
+    public record StreamClaimBatch(
+        StreamMessageId nextId,
+        int claimedCount,
+        int deletedCount
+    ) {
+    }
+
+    /**
      * 创建消费者组（如果不存在）
      */
     public void createStreamGroup(String streamKey, String groupName) {
@@ -334,6 +376,49 @@ public class RedisService {
     public long streamLen(String streamKey) {
         RStream<String, String> stream = redissonClient.getStream(streamKey, StringCodec.INSTANCE);
         return stream.size();
+    }
+
+    public StreamGroupStatus streamGroupStatus(String streamKey, String groupName) {
+        RStream<String, String> stream = redissonClient.getStream(streamKey, StringCodec.INSTANCE);
+        return stream.listGroups().stream()
+            .filter(group -> groupName.equals(group.getName()))
+            .findFirst()
+            .map(this::toStreamGroupStatus)
+            .orElse(new StreamGroupStatus(groupName, 0, 0, 0));
+    }
+
+    public Map<StreamMessageId, Map<String, String>> streamRangeReversed(
+            String streamKey,
+            int count) {
+        RStream<String, String> stream = redissonClient.getStream(streamKey, StringCodec.INSTANCE);
+        return stream.rangeReversed(count, StreamMessageId.MAX, StreamMessageId.MIN);
+    }
+
+    public Map<String, String> streamGet(String streamKey, StreamMessageId messageId) {
+        RStream<String, String> stream = redissonClient.getStream(streamKey, StringCodec.INSTANCE);
+        return stream.range(1, messageId, messageId).get(messageId);
+    }
+
+    public long streamRemove(String streamKey, StreamMessageId messageId) {
+        RStream<String, String> stream = redissonClient.getStream(streamKey, StringCodec.INSTANCE);
+        return stream.remove(messageId);
+    }
+
+    private StreamGroupStatus toStreamGroupStatus(StreamGroup group) {
+        return new StreamGroupStatus(
+            group.getName(),
+            group.getPending(),
+            group.getLag(),
+            group.getConsumers()
+        );
+    }
+
+    public record StreamGroupStatus(
+        String groupName,
+        long pendingCount,
+        long lag,
+        int consumerCount
+    ) {
     }
 
     // ==================== 原子计数器 ====================

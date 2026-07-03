@@ -13,6 +13,7 @@ import java.util.Map;
 public class LlmProviderProperties {
     private String defaultProvider = "dashscope";
     private String defaultEmbeddingProvider;
+    private List<String> managedProviders = List.of();
     private Integer embeddingDimensions = 1024;
     private Map<String, ProviderConfig> providers;
     private AdvisorConfig advisors = new AdvisorConfig();

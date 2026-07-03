@@ -4,7 +4,9 @@ import interview.guide.common.constant.AsyncTaskStreamConstants;
 import interview.guide.infrastructure.redis.RedisService;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Redis Stream 生产者模板基类。
@@ -21,9 +23,14 @@ public abstract class AbstractStreamProducer<T> {
 
     protected void sendTask(T payload) {
         try {
+            Map<String, String> message = new LinkedHashMap<>(buildMessage(payload));
+            message.putIfAbsent(
+                AsyncTaskStreamConstants.FIELD_TASK_ID,
+                UUID.randomUUID().toString()
+            );
             String messageId = redisService.streamAdd(
                 streamKey(),
-                buildMessage(payload),
+                message,
                 AsyncTaskStreamConstants.STREAM_MAX_LEN
             );
             log.info("{}任务已发送到Stream: {}, messageId={}",

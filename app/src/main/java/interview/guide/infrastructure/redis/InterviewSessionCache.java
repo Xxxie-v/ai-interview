@@ -2,6 +2,7 @@ package interview.guide.infrastructure.redis;
 
 import interview.guide.common.exception.BusinessException;
 import interview.guide.common.exception.ErrorCode;
+import interview.guide.common.model.AsyncTaskStatus;
 import interview.guide.modules.interview.model.InterviewQuestionDTO;
 import interview.guide.modules.interview.model.InterviewSessionDTO.SessionStatus;
 import lombok.Data;
@@ -55,6 +56,8 @@ public class InterviewSessionCache {
         private String questionsJson;  // 序列化的问题列表
         private int currentIndex;
         private SessionStatus status;
+        private AsyncTaskStatus questionPrepareStatus;
+        private String questionPrepareError;
 
         public CachedSession() {
         }
@@ -67,6 +70,9 @@ public class InterviewSessionCache {
             this.resumeId = resumeId;
             this.currentIndex = currentIndex;
             this.status = status;
+            this.questionPrepareStatus = questions.isEmpty()
+                ? AsyncTaskStatus.PENDING
+                : AsyncTaskStatus.COMPLETED;
             try {
                 this.questionsJson = objectMapper.writeValueAsString(questions);
             } catch (JacksonException e) {
@@ -160,6 +166,17 @@ public class InterviewSessionCache {
             } catch (JacksonException e) {
                 log.error("序列化问题列表失败", e);
             }
+        });
+    }
+
+    public void updateQuestionPreparation(
+        String sessionId,
+        AsyncTaskStatus status,
+        String error) {
+        getSession(sessionId).ifPresent(session -> {
+            session.setQuestionPrepareStatus(status);
+            session.setQuestionPrepareError(error);
+            redisService.set(buildSessionKey(sessionId), session, SESSION_TTL);
         });
     }
 
