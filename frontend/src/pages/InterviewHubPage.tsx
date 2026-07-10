@@ -3,15 +3,19 @@ import { useNavigate, Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   ChevronDown, ChevronUp, FileStack, FileText, Loader2, Mic,
-  RefreshCw, Sparkles,
+  Sparkles,
 } from 'lucide-react';
 import { type SkillDTO } from '../api/skill';
 import { interviewApi, type TextSessionMeta } from '../api/interview';
 import { voiceInterviewApi, type SessionMeta } from '../api/voiceInterview';
 import { getSkillIcon } from '../utils/skillIcons';
 import { getTemplateName } from '../utils/voiceInterview';
-import { getScoreTextColor } from '../utils/score';
 import { formatDateTime } from '../utils/date';
+import type { InterviewReviewStatus } from '../api/history';
+import {
+  interviewReviewStatusClass,
+  interviewReviewStatusLabel,
+} from '../utils/interviewReviewStatus';
 import {
   useInterviewConfig,
   CUSTOM_SKILL_ID,
@@ -24,9 +28,7 @@ interface RecentInterviewItem {
   id: string;
   type: 'text' | 'voice';
   title: string;
-  status: string;
-  evaluateStatus?: string | null;
-  overallScore: number | null;
+  status: InterviewReviewStatus;
   createdAt: string;
   voiceSessionId?: number;
 }
@@ -52,18 +54,17 @@ export default function InterviewHubPage() {
         ...textSessions.map(s => ({
           id: s.sessionId,
           type: 'text' as const,
-          title: getTemplateName(s.skillId, allSkills),
+          title: s.jobName || getTemplateName(s.skillId, allSkills),
           status: s.status,
-          evaluateStatus: s.evaluateStatus,
-          overallScore: s.overallScore,
           createdAt: s.createdAt,
         })),
         ...voiceSessions.map(s => ({
           id: `voice-${s.sessionId}`,
           type: 'voice' as const,
           title: s.roleType || '语音面试',
-          status: s.status,
-          overallScore: null,
+          status: s.status === 'COMPLETED' || s.status === 'EVALUATED'
+            ? 'UNDER_MANUAL_REVIEW' as const
+            : 'INCOMPLETE' as const,
           createdAt: s.createdAt,
           voiceSessionId: s.sessionId,
         })),
@@ -88,7 +89,7 @@ export default function InterviewHubPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleStart = () => {
+  const handleStart = (officialInterview = false) => {
     const selectedSkill = config.selectedSkill;
     const skillName = selectedSkill?.name || '自定义';
 
@@ -108,6 +109,7 @@ export default function InterviewHubPage() {
             llmProvider: config.llmProvider,
             jdText: config.isCustomSkill ? config.parsedCustomJdText : undefined,
             customCategories: config.isCustomSkill ? config.customCategories : undefined,
+            officialInterview,
           },
         },
       });
@@ -442,17 +444,35 @@ export default function InterviewHubPage() {
 
         {/* 开始面试按钮 */}
         <div className="mt-6 pt-6 border-t border-slate-100 dark:border-slate-700">
-          <motion.button
-            onClick={handleStart}
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.99 }}
-            disabled={config.isCustomStartDisabled}
-            className="w-full px-6 py-3 rounded-xl font-semibold text-sm transition-all
-              bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700
-              text-white shadow-lg shadow-primary-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            开始{config.mode === 'text' ? '文字' : '语音'}面试
-          </motion.button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <motion.button
+              onClick={() => handleStart(false)}
+              whileHover={{ scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
+              disabled={config.isCustomStartDisabled}
+              className="px-6 py-3 rounded-xl font-semibold text-sm transition-all
+                bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200
+                hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              开始练习面试
+            </motion.button>
+            <motion.button
+              onClick={() => handleStart(true)}
+              whileHover={{ scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
+              disabled={config.isCustomStartDisabled || config.mode !== 'text'}
+              className="px-6 py-3 rounded-xl font-semibold text-sm transition-all
+                bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700
+                text-white shadow-lg shadow-primary-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              开始正式面试
+            </motion.button>
+          </div>
+          {config.mode !== 'text' && (
+            <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">
+              正式面试暂支持文字面试，完成后结果会同步到 HR 后台。
+            </p>
+          )}
         </div>
       </div>
 
@@ -479,8 +499,6 @@ export default function InterviewHubPage() {
         ) : (
           <div className="space-y-2">
             {recentInterviews.map((item, index) => {
-              const isCompleted = item.evaluateStatus === 'COMPLETED' || item.status === 'EVALUATED';
-              const isEvaluating = item.evaluateStatus === 'PENDING' || item.evaluateStatus === 'PROCESSING';
               return (
                 <motion.div
                   key={item.id}
@@ -521,16 +539,11 @@ export default function InterviewHubPage() {
                       <span className="text-xs text-slate-400 dark:text-slate-500">
                         {formatDateTime(item.createdAt)}
                       </span>
-                      {isEvaluating && (
-                        <span className="flex items-center gap-1 text-xs text-blue-500">
-                          <RefreshCw className="w-3 h-3 animate-spin" /> 评估中
-                        </span>
-                      )}
-                      {isCompleted && item.overallScore !== null && (
-                        <span className="text-xs text-slate-600 dark:text-slate-300">
-                          得分 <span className={`font-bold ${getScoreTextColor(item.overallScore!)}`}>{item.overallScore}</span>
-                        </span>
-                      )}
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                        interviewReviewStatusClass[item.status]
+                      }`}>
+                        {interviewReviewStatusLabel[item.status]}
+                      </span>
                     </div>
                   </div>
 

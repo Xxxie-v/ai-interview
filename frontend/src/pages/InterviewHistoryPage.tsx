@@ -1,11 +1,13 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {Fragment, useCallback, useEffect, useRef, useState} from 'react';
 import {useNavigate} from 'react-router-dom';
 import {AnimatePresence, motion} from 'framer-motion';
 import {historyApi} from '../api/history';
 import {interviewApi, type TextSessionMeta} from '../api/interview';
-import {voiceInterviewApi, SessionMeta} from '../api/voiceInterview';
 import {formatDate} from '../utils/date';
-import {getScoreProgressColor} from '../utils/score';
+import type {InterviewReviewStatus} from '../api/history';
+import {
+  interviewReviewStatusLabel,
+} from '../utils/interviewReviewStatus';
 import {skillApi, type SkillDTO} from '../api/skill';
 import {getTemplateName} from '../utils/voiceInterview';
 import DeleteConfirmDialog from '../components/DeleteConfirmDialog';
@@ -20,10 +22,8 @@ import {
   Mic,
   PlayCircle,
   RefreshCw,
-  RotateCcw,
   Search,
   Trash2,
-  TrendingUp,
   Users,
 } from 'lucide-react';
 
@@ -34,61 +34,43 @@ interface UnifiedInterviewItem {
   type: 'text' | 'voice';
   title: string;
   sessionId: string;
-  status: string;
-  evaluateStatus?: string;
-  evaluateError?: string;
-  overallScore: number | null;
+  status: InterviewReviewStatus;
+  executionStatus: string;
   totalQuestions?: number;
   actualDuration?: number;
   createdAt: string;
   resumeId?: number;
   voiceSessionId?: number;
+  jobId?: number;
+  jobName: string;
 }
 
 interface InterviewStats {
   totalCount: number;
   completedCount: number;
-  averageScore: number;
+  passedCount: number;
 }
 
-function isCompletedStatus(status: string): boolean {
-  return status === 'COMPLETED' || status === 'EVALUATED';
+function isCompletedStatus(status: InterviewReviewStatus): boolean {
+  return status !== 'INCOMPLETE';
 }
 
 function isLiveStatus(status: string): boolean {
   return status === 'IN_PROGRESS' || status === 'PAUSED';
 }
 
-function isEvaluateCompleted(item: UnifiedInterviewItem): boolean {
-  if (item.evaluateStatus === 'COMPLETED') return true;
-  if (item.status === 'EVALUATED') return true;
-  return false;
-}
-
-function isEvaluating(item: UnifiedInterviewItem): boolean {
-  return item.evaluateStatus === 'PENDING' || item.evaluateStatus === 'PROCESSING';
-}
-
-function isEvaluateFailed(item: UnifiedInterviewItem): boolean {
-  return item.evaluateStatus === 'FAILED';
-}
-
 function StatusIcon({ item }: { item: UnifiedInterviewItem }) {
-  if (isEvaluateFailed(item)) return <AlertCircle className="w-4 h-4 text-red-500 dark:text-red-400"/>;
-  if (isEvaluating(item)) return <RefreshCw className="w-4 h-4 text-blue-500 dark:text-blue-400 animate-spin"/>;
-  if (isEvaluateCompleted(item)) return <CheckCircle className="w-4 h-4 text-green-500 dark:text-green-400"/>;
-  if (item.status === 'IN_PROGRESS') return <PlayCircle className="w-4 h-4 text-blue-500 dark:text-blue-400"/>;
+  if (item.status === 'REJECTED') return <AlertCircle className="w-4 h-4 text-red-500 dark:text-red-400"/>;
+  if (item.status === 'UNDER_MANUAL_REVIEW') return <RefreshCw className="w-4 h-4 text-amber-500 dark:text-amber-400"/>;
+  if (item.status === 'PASSED') {
+    return <CheckCircle className="w-4 h-4 text-green-500 dark:text-green-400"/>;
+  }
+  if (item.executionStatus === 'IN_PROGRESS') return <PlayCircle className="w-4 h-4 text-blue-500 dark:text-blue-400"/>;
   return <Clock className="w-4 h-4 text-yellow-500 dark:text-yellow-400"/>;
 }
 
 function getStatusText(item: UnifiedInterviewItem): string {
-  if (isEvaluateFailed(item)) return '评估失败';
-  if (isEvaluating(item)) return item.evaluateStatus === 'PROCESSING' ? '评估中' : '等待评估';
-  if (isEvaluateCompleted(item)) return '已完成';
-  if (item.status === 'IN_PROGRESS') return '进行中';
-  if (item.status === 'PAUSED') return '已暂停';
-  if (isCompletedStatus(item.status)) return '已提交';
-  return '已创建';
+  return interviewReviewStatusLabel[item.status];
 }
 
 function formatDuration(seconds?: number): string {
@@ -152,8 +134,7 @@ function TypeBadge({ type }: { type: 'text' | 'voice' }) {
 interface InterviewHistoryPageProps {
   onBack: () => void;
   onViewInterview: (sessionId: string, resumeId?: number) => void;
-  onRestartInterview?: (resumeId: number) => void;
-  onContinueInterview?: (sessionId: string) => void;
+  onContinueInterview?: (sessionId: string, jobId: number) => void;
 }
 
 /** Shallow comparison for polling change-detection */
@@ -161,13 +142,13 @@ function itemsEqual(a: UnifiedInterviewItem[], b: UnifiedInterviewItem[]): boole
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     const ai = a[i], bi = b[i];
-    if (ai.id !== bi.id || ai.status !== bi.status ||
-        ai.evaluateStatus !== bi.evaluateStatus || ai.overallScore !== bi.overallScore) return false;
+    if (ai.id !== bi.id || ai.status !== bi.status
+        || ai.executionStatus !== bi.executionStatus) return false;
   }
   return true;
 }
 
-export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview, onRestartInterview, onContinueInterview }: InterviewHistoryPageProps) {
+export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview, onContinueInterview }: InterviewHistoryPageProps) {
   const navigate = useNavigate();
   const [items, setItems] = useState<UnifiedInterviewItem[]>([]);
   const [stats, setStats] = useState<InterviewStats | null>(null);
@@ -177,7 +158,6 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [deleteItem, setDeleteItem] = useState<UnifiedInterviewItem | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
-  const pollingRef = useRef<number | null>(null);
   const skillsRef = useRef<SkillDTO[]>([]);
   const skillsLoadedRef = useRef(false);
 
@@ -191,17 +171,7 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
         skillsLoadedRef.current = true;
       }
       const loadedSkills = skillsRef.current;
-      const [textInterviews, voiceSessions] = await Promise.all([
-        loadTextInterviews(loadedSkills),
-        loadVoiceInterviews(),
-      ]);
-
-      const voiceWithNames = voiceSessions.map(item => {
-        const skillName = getTemplateName(item.title, loadedSkills);
-        return skillName !== item.title ? { ...item, title: skillName } : item;
-      });
-
-      const all = [...textInterviews, ...voiceWithNames];
+      const all = await loadTextInterviews(loadedSkills);
       all.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
       setItems(prev => {
@@ -210,18 +180,17 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
       });
 
       // Compute stats
-      const evaluated = all.filter(i => isEvaluateCompleted(i));
-      const totalScore = evaluated.reduce((sum, i) => sum + (i.overallScore || 0), 0);
+      const completed = all.filter(i => isCompletedStatus(i.status));
       const newStats = {
         totalCount: all.length,
-        completedCount: evaluated.length,
-        averageScore: evaluated.length > 0 ? Math.round(totalScore / evaluated.length) : 0,
+        completedCount: completed.length,
+        passedCount: all.filter(item => item.status === 'PASSED').length,
       };
       setStats(prev => {
         if (isPolling && prev &&
             prev.totalCount === newStats.totalCount &&
             prev.completedCount === newStats.completedCount &&
-            prev.averageScore === newStats.averageScore) return prev;
+            prev.passedCount === newStats.passedCount) return prev;
         return newStats;
       });
     } catch (err) {
@@ -238,37 +207,15 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
       return sessions.map((session: TextSessionMeta) => ({
         id: session.sessionId,
         type: 'text' as const,
-        title: getTemplateName(session.skillId, skills),
+        title: session.jobName || getTemplateName(session.skillId, skills),
         sessionId: session.sessionId,
         status: session.status,
-        evaluateStatus: session.evaluateStatus ?? undefined,
-        evaluateError: session.evaluateError ?? undefined,
-        overallScore: session.overallScore,
+        executionStatus: session.executionStatus,
         totalQuestions: session.totalQuestions,
         createdAt: session.createdAt,
         resumeId: session.resumeId ?? undefined,
-      }));
-    } catch {
-      return [];
-    }
-  }
-
-  // Load voice interviews from voice API
-  async function loadVoiceInterviews(): Promise<UnifiedInterviewItem[]> {
-    try {
-      const sessions = await voiceInterviewApi.getAllSessions();
-      return sessions.map((session: SessionMeta) => ({
-        id: `voice-${session.sessionId}`,
-        type: 'voice' as const,
-        title: session.roleType,
-        sessionId: String(session.sessionId),
-        status: session.status,
-        evaluateStatus: session.evaluateStatus,
-        evaluateError: session.evaluateError,
-        overallScore: null,
-        actualDuration: session.actualDuration,
-        createdAt: session.createdAt,
-        voiceSessionId: session.sessionId,
+        jobId: session.jobId ?? undefined,
+        jobName: session.jobName || '历史面试',
       }));
     } catch {
       return [];
@@ -279,30 +226,11 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
     loadAll();
   }, [loadAll]);
 
-  // Polling for evaluation status
-  useEffect(() => {
-    const hasEvaluating = items.some(i => isEvaluating(i));
-
-    if (hasEvaluating && !pollingRef.current) {
-      pollingRef.current = window.setInterval(() => loadAll(true), 3000);
-    } else if (!hasEvaluating && pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-
-    return () => {
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
-    };
-  }, [items, loadAll]);
-
   const handleRowClick = (item: UnifiedInterviewItem) => {
     if (item.type === 'text') {
       onViewInterview(item.sessionId, item.resumeId);
     } else if (item.voiceSessionId) {
-      const isLive = isLiveStatus(item.status);
+      const isLive = isLiveStatus(item.executionStatus);
       if (isLive) {
         navigate('/voice-interview', { state: { voiceSessionId: item.voiceSessionId } });
       } else {
@@ -320,11 +248,7 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
     if (!deleteItem) return;
     setDeletingSessionId(deleteItem.sessionId);
     try {
-      if (deleteItem.type === 'voice' && deleteItem.voiceSessionId) {
-        await voiceInterviewApi.deleteSession(deleteItem.voiceSessionId);
-      } else {
-        await historyApi.deleteInterview(deleteItem.sessionId);
-      }
+      await historyApi.deleteInterview(deleteItem.sessionId);
       await loadAll();
       setDeleteItem(null);
     } catch (err) {
@@ -355,11 +279,14 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
   };
 
   // Filter + search
-  const filtered = items.filter(item => {
-    if (typeFilter !== 'all' && item.type !== typeFilter) return false;
-    if (searchTerm && !item.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
-    return true;
-  });
+  const filtered = items
+    .filter(item => {
+      if (typeFilter !== 'all' && item.type !== typeFilter) return false;
+      if (searchTerm && !item.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+      return true;
+    })
+    .sort((a, b) => a.jobName.localeCompare(b.jobName, 'zh-CN')
+      || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   return (
     <motion.div className="w-full" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
@@ -405,7 +332,7 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <StatCard icon={Users} label="面试总数" value={stats.totalCount} color="bg-primary-500" />
           <StatCard icon={CheckCircle} label="已完成" value={stats.completedCount} color="bg-emerald-500" />
-          <StatCard icon={TrendingUp} label="平均分数" value={stats.averageScore} suffix="分" color="bg-indigo-500" />
+          <StatCard icon={CheckCircle} label="已通过" value={stats.passedCount} color="bg-indigo-500" />
         </div>
       )}
 
@@ -413,8 +340,7 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
       <div className="flex items-center gap-2 mb-6">
         {([
           { key: 'all', label: '全部' },
-          { key: 'text', label: '文字面试' },
-          { key: 'voice', label: '语音面试' },
+          { key: 'text', label: '正式面试' },
         ] as const).map(tab => (
           <button
             key={tab.key}
@@ -464,7 +390,6 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
                 <th className="text-left px-6 py-4 text-sm font-medium text-slate-600 dark:text-slate-300">类型</th>
                 <th className="text-left px-6 py-4 text-sm font-medium text-slate-600 dark:text-slate-300">名称</th>
                 <th className="text-left px-6 py-4 text-sm font-medium text-slate-600 dark:text-slate-300">状态</th>
-                <th className="text-left px-6 py-4 text-sm font-medium text-slate-600 dark:text-slate-300">得分</th>
                 <th className="text-left px-6 py-4 text-sm font-medium text-slate-600 dark:text-slate-300">详情</th>
                 <th className="text-left px-6 py-4 text-sm font-medium text-slate-600 dark:text-slate-300">时间</th>
                 <th className="text-right px-6 py-4 text-sm font-medium text-slate-600 dark:text-slate-300">操作</th>
@@ -473,8 +398,18 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
             <tbody>
               <AnimatePresence>
                 {filtered.map((item, index) => (
+                  <Fragment key={item.id}>
+                  {(index === 0
+                    || filtered[index - 1].jobId !== item.jobId
+                    || filtered[index - 1].jobName !== item.jobName) && (
+                    <tr className="bg-primary-50/70 dark:bg-primary-950/20">
+                      <td colSpan={6} className="px-6 py-2 text-sm font-semibold text-primary-700 dark:text-primary-300">
+                        岗位：{item.jobName}
+                      </td>
+                    </tr>
+                  )}
                   <motion.tr
-                    key={item.id}
+                    key={`${item.id}-row`}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.05 }}
@@ -504,27 +439,6 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      {isEvaluateCompleted(item) && item.overallScore !== null ? (
-                        <div className="flex items-center gap-3">
-                          <div className="w-16 h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
-                            <motion.div
-                              className={`h-full ${getScoreProgressColor(item.overallScore)} rounded-full`}
-                              initial={{ width: 0 }}
-                              animate={{ width: `${item.overallScore}%` }}
-                              transition={{ duration: 0.8, delay: index * 0.05 }}
-                            />
-                          </div>
-                          <span className="font-bold text-slate-800 dark:text-white">{item.overallScore}</span>
-                        </div>
-                      ) : isEvaluating(item) ? (
-                        <span className="text-blue-500 dark:text-blue-400 text-sm">生成中...</span>
-                      ) : isEvaluateFailed(item) ? (
-                        <span className="text-red-500 dark:text-red-400 text-sm" title={item.evaluateError}>失败</span>
-                      ) : (
-                        <span className="text-slate-400 dark:text-slate-500">-</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
                       {item.type === 'text' && item.totalQuestions != null ? (
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg text-sm">
                           {item.totalQuestions} 题
@@ -542,16 +456,25 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-1">
-                        {item.type === 'text' && !isCompletedStatus(item.status) && !isEvaluateCompleted(item) && onContinueInterview && (
+                        {item.type === 'text'
+                          && Boolean(item.jobId)
+                          && item.executionStatus !== 'COMPLETED'
+                          && item.executionStatus !== 'EVALUATED'
+                          && onContinueInterview && (
                           <button
-                            onClick={(e) => { e.stopPropagation(); onContinueInterview(item.sessionId); }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onContinueInterview(item.sessionId, item.jobId!);
+                            }}
                             className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
                             title="继续面试"
                           >
                             <PlayCircle className="w-4 h-4" />
                           </button>
                         )}
-                        {item.type === 'voice' && isLiveStatus(item.status) && item.voiceSessionId && (
+                        {item.type === 'voice'
+                          && isLiveStatus(item.executionStatus)
+                          && item.voiceSessionId && (
                           <button
                             onClick={(e) => { e.stopPropagation(); navigate('/voice-interview', { state: { voiceSessionId: item.voiceSessionId } }); }}
                             className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
@@ -560,7 +483,7 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
                             <PlayCircle className="w-4 h-4" />
                           </button>
                         )}
-                        {isEvaluateCompleted(item) && item.type === 'text' && (
+                        {isCompletedStatus(item.status) && item.type === 'text' && (
                           <button
                             onClick={(e) => handleExport(item.sessionId, e)}
                             disabled={exporting === item.sessionId}
@@ -574,27 +497,19 @@ export default function InterviewHistoryPage({ onBack: _onBack, onViewInterview,
                             )}
                           </button>
                         )}
-                        {isEvaluateCompleted(item) && item.type === 'text' && item.resumeId && onRestartInterview && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); onRestartInterview(item.resumeId!); }}
-                            className="p-2 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded-lg transition-colors"
-                            title="重新面试"
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                          </button>
-                        )}
-                        <button
+                        {(item.type === 'voice' || !item.jobId) && <button
                             onClick={(e) => handleDeleteClick(item, e)}
                             disabled={deletingSessionId === item.sessionId}
                             className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors disabled:opacity-50"
                             title="删除"
                           >
                             <Trash2 className="w-4 h-4" />
-                          </button>
+                          </button>}
                         <ChevronRight className="w-5 h-5 text-slate-300 dark:text-slate-600 group-hover:text-primary-500 group-hover:translate-x-1 transition-all"/>
                       </div>
                     </td>
                   </motion.tr>
+                  </Fragment>
                 ))}
               </AnimatePresence>
             </tbody>

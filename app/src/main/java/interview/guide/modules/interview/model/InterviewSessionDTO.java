@@ -1,5 +1,6 @@
 package interview.guide.modules.interview.model;
 
+import interview.guide.common.model.AsyncTaskStatus;
 import java.util.List;
 
 /**
@@ -11,7 +12,12 @@ public record InterviewSessionDTO(
     int totalQuestions,
     int currentQuestionIndex,
     List<InterviewQuestionDTO> questions,
-    SessionStatus status
+    SessionStatus status,
+    String webSocketPath,
+    AsyncTaskStatus questionPrepareStatus,
+    String questionPrepareError,
+    AsyncTaskStatus evaluateStatus,
+    String evaluateError
 ) {
     public enum SessionStatus {
         CREATED,      // 会话已创建

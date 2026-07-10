@@ -333,6 +333,37 @@ public class InterviewSkillService {
         );
     }
 
+    public List<QuestionBankItem> loadQuestionBank(String skillId) {
+        SkillDTO skill = getSkill(skillId);
+        List<QuestionBankItem> items = new ArrayList<>();
+        for (SkillCategoryDTO category : skill.categories()) {
+            if (category.ref() == null || category.ref().isBlank()) {
+                continue;
+            }
+            String reference = loadReferenceContent(skill.id(), category.ref(), category.shared());
+            boolean followUpSection = false;
+            for (String rawLine : reference.lines().toList()) {
+                String line = rawLine.trim();
+                if (line.startsWith("## ")) {
+                    followUpSection = line.contains("追问");
+                    continue;
+                }
+                if (followUpSection || !line.startsWith("- ")) {
+                    continue;
+                }
+                String topic = line.substring(2).trim();
+                if (!topic.isBlank()) {
+                    items.add(new QuestionBankItem(
+                        "请说明你对“" + topic + "”的理解，并结合实际场景回答。",
+                        category.key(),
+                        category.label(),
+                        topic));
+                }
+            }
+        }
+        return items;
+    }
+
     /**
      * 评估阶段参考基线：不限制题量分配，覆盖该 skill 下所有配置了 reference 的分类。
      */
@@ -636,6 +667,12 @@ public class InterviewSkillService {
      * 预设 Skill 分类（可携带 references 绑定信息）
      */
     public record SkillCategoryDTO(String key, String label, String priority, String ref, boolean shared) {}
+
+    public record QuestionBankItem(
+        String question,
+        String type,
+        String category,
+        String topicSummary) {}
 
     /**
      * JD 解析返回分类（可携带 LLM 匹配的 ref/shared 信息，后端会按本地 categoryRefIndex 纠正）

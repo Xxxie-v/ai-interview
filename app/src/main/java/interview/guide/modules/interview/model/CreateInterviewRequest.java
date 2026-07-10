@@ -30,5 +30,9 @@ public record CreateInterviewRequest(
 
     List<CategoryDTO> customCategories,   // 自定义面试的分类（JD 解析结果）
 
-    String jdText                          // JD 原文（自定义面试时作为出题依据）
+    String jdText,                         // JD 原文（自定义面试时作为出题依据）
+
+    Boolean officialInterview,             // 是否正式面试，正式结果会进入 HR 后台
+
+    Long jobId                             // 应聘岗位 ID（岗位面试时必填）
 ) {}

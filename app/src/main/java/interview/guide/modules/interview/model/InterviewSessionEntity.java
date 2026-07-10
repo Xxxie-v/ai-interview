@@ -15,13 +15,40 @@ import java.util.List;
 @Table(name = "interview_sessions", indexes = {
     @Index(name = "idx_interview_session_resume_created", columnList = "resume_id,created_at"),
     @Index(name = "idx_interview_session_resume_status_created", columnList = "resume_id,status,created_at"),
-    @Index(name = "idx_interview_session_skill_created", columnList = "skillId,createdAt")
+    @Index(name = "idx_interview_session_skill_created", columnList = "skillId,createdAt"),
+    @Index(name = "idx_interview_session_owner_job", columnList = "owner_user_id,job_id"),
+    @Index(
+        name = "idx_interview_question_prepare_recovery",
+        columnList = "question_prepare_status,question_prepare_updated_at")
 })
 public class InterviewSessionEntity {
     
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(name = "owner_user_id", nullable = false)
+    private Long ownerUserId;
+
+    @Column(name = "job_id")
+    private Long jobId;
+
+    @Column(name = "assignment_id")
+    private Long assignmentId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "flow_status", length = 24)
+    private InterviewFlowStatus flowStatus = InterviewFlowStatus.INIT;
+
+    @Column(name = "started_at")
+    private LocalDateTime startedAt;
+
+    @Column(name = "ended_at")
+    private LocalDateTime endedAt;
+
+    @Version
+    @Column(nullable = false, columnDefinition = "bigint default 0")
+    private Long version = 0L;
     
     // 会话ID (UUID)
     @Column(nullable = false, unique = true, length = 36)
@@ -54,6 +81,14 @@ public class InterviewSessionEntity {
     @Enumerated(EnumType.STRING)
     @Column(length = 20)
     private SessionStatus status = SessionStatus.CREATED;
+
+    @Enumerated(EnumType.STRING)
+    @Column(
+        name = "review_status",
+        nullable = false,
+        length = 32,
+        columnDefinition = "varchar(32) default 'INCOMPLETE'")
+    private InterviewReviewStatus reviewStatus = InterviewReviewStatus.INCOMPLETE;
     
     // 问题列表 (JSON格式)
     @Column(columnDefinition = "TEXT")
@@ -98,9 +133,29 @@ public class InterviewSessionEntity {
     @Column(length = 500)
     private String evaluateError;
 
+    @Enumerated(EnumType.STRING)
+    @Column(
+        name = "question_prepare_status",
+        nullable = false,
+        length = 20,
+        columnDefinition = "varchar(20) default 'PENDING'")
+    private AsyncTaskStatus questionPrepareStatus = AsyncTaskStatus.PENDING;
+
+    @Column(name = "question_prepare_error", length = 500)
+    private String questionPrepareError;
+
+    @Column(name = "question_prepared_at")
+    private LocalDateTime questionPreparedAt;
+
+    @Column(name = "question_prepare_updated_at")
+    private LocalDateTime questionPrepareUpdatedAt;
+
     // LLM提供商
     @Column(length = 50)
-    private String llmProvider = "dashscope";
+    private String llmProvider;
+
+    @Column(nullable = false, columnDefinition = "boolean default false")
+    private boolean officialInterview;
     
     public enum SessionStatus {
         CREATED,      // 会话已创建
@@ -112,6 +167,12 @@ public class InterviewSessionEntity {
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
+        if (questionPrepareUpdatedAt == null) {
+            questionPrepareUpdatedAt = createdAt;
+        }
+        if (reviewStatus == null) {
+            reviewStatus = InterviewReviewStatus.INCOMPLETE;
+        }
     }
     
     // Getters and Setters
@@ -121,6 +182,58 @@ public class InterviewSessionEntity {
     
     public void setId(Long id) {
         this.id = id;
+    }
+
+    public Long getOwnerUserId() {
+        return ownerUserId;
+    }
+
+    public void setOwnerUserId(Long ownerUserId) {
+        this.ownerUserId = ownerUserId;
+    }
+
+    public Long getJobId() {
+        return jobId;
+    }
+
+    public void setJobId(Long jobId) {
+        this.jobId = jobId;
+    }
+
+    public Long getAssignmentId() {
+        return assignmentId;
+    }
+
+    public void setAssignmentId(Long assignmentId) {
+        this.assignmentId = assignmentId;
+    }
+
+    public InterviewFlowStatus getFlowStatus() {
+        return flowStatus;
+    }
+
+    public void setFlowStatus(InterviewFlowStatus flowStatus) {
+        this.flowStatus = flowStatus;
+    }
+
+    public LocalDateTime getStartedAt() {
+        return startedAt;
+    }
+
+    public void setStartedAt(LocalDateTime startedAt) {
+        this.startedAt = startedAt;
+    }
+
+    public LocalDateTime getEndedAt() {
+        return endedAt;
+    }
+
+    public void setEndedAt(LocalDateTime endedAt) {
+        this.endedAt = endedAt;
+    }
+
+    public Long getVersion() {
+        return version;
     }
     
     public String getSessionId() {
@@ -165,6 +278,22 @@ public class InterviewSessionEntity {
     
     public void setStatus(SessionStatus status) {
         this.status = status;
+    }
+
+    public InterviewReviewStatus getReviewStatus() {
+        return reviewStatus;
+    }
+
+    public InterviewReviewStatus getEffectiveReviewStatus() {
+        if ((reviewStatus == null || reviewStatus == InterviewReviewStatus.INCOMPLETE)
+            && (status == SessionStatus.COMPLETED || status == SessionStatus.EVALUATED)) {
+            return InterviewReviewStatus.UNDER_MANUAL_REVIEW;
+        }
+        return reviewStatus != null ? reviewStatus : InterviewReviewStatus.INCOMPLETE;
+    }
+
+    public void setReviewStatus(InterviewReviewStatus reviewStatus) {
+        this.reviewStatus = reviewStatus;
     }
     
     public String getQuestionsJson() {
@@ -255,12 +384,57 @@ public class InterviewSessionEntity {
         this.evaluateError = evaluateError;
     }
 
+    public AsyncTaskStatus getQuestionPrepareStatus() {
+        if (questionPrepareStatus != null) {
+            return questionPrepareStatus;
+        }
+        return questionsJson != null && !questionsJson.isBlank() && !"[]".equals(questionsJson)
+            ? AsyncTaskStatus.COMPLETED
+            : AsyncTaskStatus.PENDING;
+    }
+
+    public void setQuestionPrepareStatus(AsyncTaskStatus questionPrepareStatus) {
+        this.questionPrepareStatus = questionPrepareStatus;
+    }
+
+    public String getQuestionPrepareError() {
+        return questionPrepareError;
+    }
+
+    public void setQuestionPrepareError(String questionPrepareError) {
+        this.questionPrepareError = questionPrepareError;
+    }
+
+    public LocalDateTime getQuestionPreparedAt() {
+        return questionPreparedAt;
+    }
+
+    public void setQuestionPreparedAt(LocalDateTime questionPreparedAt) {
+        this.questionPreparedAt = questionPreparedAt;
+    }
+
+    public LocalDateTime getQuestionPrepareUpdatedAt() {
+        return questionPrepareUpdatedAt;
+    }
+
+    public void setQuestionPrepareUpdatedAt(LocalDateTime questionPrepareUpdatedAt) {
+        this.questionPrepareUpdatedAt = questionPrepareUpdatedAt;
+    }
+
     public String getLlmProvider() {
         return llmProvider;
     }
 
     public void setLlmProvider(String llmProvider) {
         this.llmProvider = llmProvider;
+    }
+
+    public boolean isOfficialInterview() {
+        return officialInterview;
+    }
+
+    public void setOfficialInterview(boolean officialInterview) {
+        this.officialInterview = officialInterview;
     }
 
     public String getSkillId() {

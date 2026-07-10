@@ -1,12 +1,14 @@
-import {useMemo, useState} from 'react';
+import {useState} from 'react';
 import {motion} from 'framer-motion';
-import {CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts';
 import {formatDateOnly} from '../utils/date';
-import {getScoreColor} from '../utils/score';
 import type {InterviewItem} from '../api/history';
 import {historyApi} from '../api/history';
 import ConfirmDialog from './ConfirmDialog';
-import {Calendar, ChevronRight, Download, MessageSquare, Mic, Trash2, TrendingUp} from 'lucide-react';
+import {Calendar, ChevronRight, Download, MessageSquare, Mic, Trash2} from 'lucide-react';
+import {
+  interviewReviewStatusClass,
+  interviewReviewStatusLabel,
+} from '../utils/interviewReviewStatus';
 
 interface InterviewPanelProps {
   interviews: InterviewItem[];
@@ -54,18 +56,6 @@ export default function InterviewPanel({
     }
   };
 
-  // 准备图表数据
-  const chartData = useMemo(() => {
-    return interviews
-      .filter(i => i.overallScore !== null)
-      .map((interview) => ({
-        name: formatDateOnly(interview.createdAt),
-        score: interview.overallScore || 0,
-        index: interviews.length - interviews.indexOf(interview)
-      }))
-      .reverse();
-  }, [interviews]);
-
   if (interviews.length === 0) {
     return (
         <div className="bg-white dark:bg-slate-800 rounded-2xl p-12 text-center">
@@ -89,60 +79,6 @@ export default function InterviewPanel({
 
   return (
     <div className="space-y-6">
-      {/* 面试表现趋势图 */}
-      {chartData.length > 0 && (
-          <motion.div
-              className="bg-white dark:bg-slate-800 rounded-2xl p-6"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-        >
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-primary-500" />
-              <span className="font-semibold text-slate-800 dark:text-white">面试表现趋势</span>
-            </div>
-            <span className="text-sm text-slate-500 dark:text-slate-400">共 {chartData.length} 场练习</span>
-          </div>
-
-          <div className="h-48">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700"/>
-                <XAxis
-                    dataKey="name"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: '#94a3b8', fontSize: 12 }}
-                />
-                <YAxis
-                  domain={[0, 100]}
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: '#94a3b8', fontSize: 12 }}
-                />
-                <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#fff',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '12px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-                  }}
-                  formatter={(value) => [`${value} 分`, '得分']}
-                />
-                <Line
-                    type="monotone"
-                    dataKey="score"
-                    stroke="#6366f1"
-                  strokeWidth={3}
-                  dot={{ fill: '#6366f1', strokeWidth: 2, r: 5 }}
-                  activeDot={{ r: 8, fill: '#6366f1' }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </motion.div>
-      )}
-
       {/* 历史面试场次 */}
       <motion.div
           className="bg-white dark:bg-slate-800 rounded-2xl p-6"
@@ -228,13 +164,10 @@ function InterviewItemCard({
       onClick={onView}
       className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer transition-colors group"
     >
-      {/* 得分 */}
-      <div className={`w-14 h-14 rounded-full flex items-center justify-center font-bold text-lg ${
-        interview.overallScore !== null 
-          ? getScoreColor(interview.overallScore, [85, 70])
-            : 'bg-slate-100 dark:bg-slate-600 text-slate-400'
+      <div className={`rounded-full px-3 py-1 text-xs font-semibold ${
+        interviewReviewStatusClass[interview.status]
       }`}>
-        {interview.overallScore ?? '-'}
+        {interviewReviewStatusLabel[interview.status]}
       </div>
 
       {/* 信息 */}

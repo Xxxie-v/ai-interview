@@ -14,22 +14,70 @@ public record InterviewQuestionDTO(
     Integer score,
     String feedback,
     boolean isFollowUp,
-    Integer parentQuestionIndex
+    Integer parentQuestionIndex,
+    QuestionContext questionContext,
+    QuestionState questionState
 ) {
-    public static InterviewQuestionDTO create(int index, String question, String type, String category) {
-        return new InterviewQuestionDTO(index, question, type, category, null, null, null, null, false, null);
-    }
+  public static InterviewQuestionDTO create(
+      int index,
+      String question,
+      String type,
+      String category) {
+    return new InterviewQuestionDTO(
+        index, question, type, category, null, null, null, null, false, null, null, null);
+  }
 
-    public static InterviewQuestionDTO create(int index, String question, String type, String category,
-                                               String topicSummary, boolean isFollowUp, Integer parentQuestionIndex) {
-        return new InterviewQuestionDTO(index, question, type, category, topicSummary, null, null, null, isFollowUp, parentQuestionIndex);
-    }
+  public static InterviewQuestionDTO create(
+      int index,
+      String question,
+      String type,
+      String category,
+      String topicSummary,
+      boolean isFollowUp,
+      Integer parentQuestionIndex) {
+    return new InterviewQuestionDTO(
+        index, question, type, category, topicSummary, null, null, null,
+        isFollowUp, parentQuestionIndex, null, null);
+  }
 
-    public InterviewQuestionDTO withAnswer(String answer) {
-        return new InterviewQuestionDTO(questionIndex, question, type, category, topicSummary, answer, score, feedback, isFollowUp, parentQuestionIndex);
-    }
+  public static InterviewQuestionDTO create(
+      int index,
+      String question,
+      String type,
+      String category,
+      String topicSummary,
+      boolean isFollowUp,
+      Integer parentQuestionIndex,
+      QuestionContext questionContext,
+      QuestionState questionState) {
+    return new InterviewQuestionDTO(
+        index, question, type, category, topicSummary, null, null, null,
+        isFollowUp, parentQuestionIndex, questionContext, questionState);
+  }
 
-    public InterviewQuestionDTO withEvaluation(int score, String feedback) {
-        return new InterviewQuestionDTO(questionIndex, question, type, category, topicSummary, userAnswer, score, feedback, isFollowUp, parentQuestionIndex);
-    }
+  public InterviewQuestionDTO withAnswer(String answer) {
+    return new InterviewQuestionDTO(
+        questionIndex, question, type, category, topicSummary, answer, score, feedback,
+        isFollowUp, parentQuestionIndex, questionContext, questionState);
+  }
+
+  public InterviewQuestionDTO withEvaluation(int score, String feedback) {
+    return new InterviewQuestionDTO(
+        questionIndex, question, type, category, topicSummary, userAnswer, score, feedback,
+        isFollowUp, parentQuestionIndex, questionContext, questionState);
+  }
+
+  public InterviewQuestionDTO withFollowUpMemory(
+      QuestionContext context,
+      QuestionState state) {
+    return new InterviewQuestionDTO(
+        questionIndex, question, type, category, topicSummary, userAnswer, score, feedback,
+        isFollowUp, parentQuestionIndex, context, state);
+  }
+
+  public InterviewQuestionDTO reindex(int newIndex, Integer newParentIndex) {
+    return new InterviewQuestionDTO(
+        newIndex, question, type, category, topicSummary, userAnswer, score, feedback,
+        isFollowUp, newParentIndex, questionContext, questionState);
+  }
 }

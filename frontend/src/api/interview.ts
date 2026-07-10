@@ -3,6 +3,7 @@ import type {
   CreateInterviewRequest,
   CurrentQuestionResponse,
   InterviewReport,
+  InterviewFlowStatusResponse,
   InterviewSession,
   SubmitAnswerRequest,
   SubmitAnswerResponse
@@ -13,11 +14,17 @@ export interface TextSessionMeta {
   skillId: string;
   difficulty: string;
   resumeId: number | null;
+  jobId: number | null;
+  jobName: string;
   totalQuestions: number;
-  status: string;
-  evaluateStatus: string | null;
-  evaluateError: string | null;
-  overallScore: number | null;
+  executionStatus: string;
+  status: 'INCOMPLETE' | 'UNDER_MANUAL_REVIEW' | 'PASSED' | 'REJECTED';
+  /** @deprecated No longer returned for interview records. */
+  evaluateStatus?: string | null;
+  /** @deprecated No longer returned for interview records. */
+  evaluateError?: string | null;
+  /** @deprecated No longer returned for interview records. */
+  overallScore?: number | null;
   createdAt: string;
   completedAt: string | null;
 }
@@ -35,7 +42,7 @@ export const interviewApi = {
    */
   async createSession(req: CreateInterviewRequest): Promise<InterviewSession> {
     return request.post<InterviewSession>('/api/interview/sessions', req, {
-      timeout: 180000, // 3分钟超时，AI生成问题需要时间
+      timeout: 15000,
     });
   },
 
@@ -44,6 +51,12 @@ export const interviewApi = {
    */
   async getSession(sessionId: string): Promise<InterviewSession> {
     return request.get<InterviewSession>(`/api/interview/sessions/${sessionId}`);
+  },
+
+  async retryQuestionPreparation(sessionId: string): Promise<InterviewSession> {
+    return request.post<InterviewSession>(
+      `/api/interview/sessions/${sessionId}/questions/retry`,
+    );
   },
 
   /**
@@ -62,6 +75,7 @@ export const interviewApi = {
       { questionIndex: req.questionIndex, answer: req.answer },
       {
         timeout: 180000, // 3分钟超时
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
       }
     );
   },
@@ -102,5 +116,26 @@ export const interviewApi = {
    */
   async completeInterview(sessionId: string): Promise<void> {
     return request.post<void>(`/api/interview/sessions/${sessionId}/complete`);
+  },
+
+  async confirmDeviceReady(sessionId: string): Promise<InterviewFlowStatusResponse> {
+    return request.post<InterviewFlowStatusResponse>(
+      `/api/interviews/${sessionId}/device-check`,
+      {cameraReady: true, microphoneReady: true},
+    );
+  },
+
+  async getFlowStatus(sessionId: string): Promise<InterviewFlowStatusResponse> {
+    return request.get<InterviewFlowStatusResponse>(
+      `/api/interview/sessions/${sessionId}/status`
+    );
+  },
+
+  async pauseInterview(sessionId: string): Promise<void> {
+    return request.post<void>(`/api/interview/sessions/${sessionId}/pause`);
+  },
+
+  async resumeInterview(sessionId: string): Promise<void> {
+    return request.post<void>(`/api/interview/sessions/${sessionId}/resume`);
   },
 };

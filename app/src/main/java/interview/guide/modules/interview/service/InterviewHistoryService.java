@@ -35,8 +35,18 @@ public class InterviewHistoryService {
     /**
      * 获取面试会话详情
      */
+    public InterviewDetailDTO getInterviewDetail(String sessionId, Long ownerUserId) {
+        Optional<InterviewSessionEntity> sessionOpt =
+            interviewPersistenceService.findBySessionIdAndOwnerUserId(sessionId, ownerUserId);
+        return getInterviewDetail(sessionOpt);
+    }
+
     public InterviewDetailDTO getInterviewDetail(String sessionId) {
         Optional<InterviewSessionEntity> sessionOpt = interviewPersistenceService.findBySessionId(sessionId);
+        return getInterviewDetail(sessionOpt);
+    }
+
+    private InterviewDetailDTO getInterviewDetail(Optional<InterviewSessionEntity> sessionOpt) {
         if (sessionOpt.isEmpty()) {
             throw new BusinessException(ErrorCode.INTERVIEW_SESSION_NOT_FOUND);
         }
@@ -59,7 +69,7 @@ public class InterviewHistoryService {
         // 构建答案详情列表（包含所有题目，未回答的也要显示）
         List<InterviewDetailDTO.AnswerDetailDTO> answerList = buildAnswerDetailList(
             allQuestions,
-            session.getAnswers()
+            interviewPersistenceService.findAnswersBySessionId(session.getSessionId())
         );
 
         // 使用 MapStruct 组装最终 DTO
@@ -108,7 +118,6 @@ public class InterviewHistoryService {
                         question.question(),
                         question.category(),
                         null,  // userAnswer
-                        question.score() != null ? question.score() : 0,  // score
                         question.feedback(),  // feedback
                         null,  // referenceAnswer
                         null,  // keyPoints
@@ -144,8 +153,18 @@ public class InterviewHistoryService {
     /**
      * 导出面试报告为PDF
      */
+    public byte[] exportInterviewPdf(String sessionId, Long ownerUserId) {
+        Optional<InterviewSessionEntity> sessionOpt =
+            interviewPersistenceService.findBySessionIdAndOwnerUserId(sessionId, ownerUserId);
+        return exportInterviewPdf(sessionOpt, sessionId);
+    }
+
     public byte[] exportInterviewPdf(String sessionId) {
         Optional<InterviewSessionEntity> sessionOpt = interviewPersistenceService.findBySessionId(sessionId);
+        return exportInterviewPdf(sessionOpt, sessionId);
+    }
+
+    private byte[] exportInterviewPdf(Optional<InterviewSessionEntity> sessionOpt, String sessionId) {
         if (sessionOpt.isEmpty()) {
             throw new BusinessException(ErrorCode.INTERVIEW_SESSION_NOT_FOUND);
         }

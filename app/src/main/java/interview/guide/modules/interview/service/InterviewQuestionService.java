@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.converter.BeanOutputConverter;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Service;
 
@@ -29,10 +30,13 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -46,8 +50,8 @@ public class InterviewQuestionService {
     private static final Logger log = LoggerFactory.getLogger(InterviewQuestionService.class);
 
     private static final String DEFAULT_QUESTION_TYPE = "GENERAL";
-    private static final int MAX_FOLLOW_UP_COUNT = 2;
     private static final double RESUME_QUESTION_RATIO = 0.6;
+    private static final long QUESTION_GENERATION_TIMEOUT_SECONDS = 90;
 
     private static final String GENERIC_MODE_SYSTEM_APPEND = """
         \n\n# 通用面试模式
@@ -82,6 +86,11 @@ public class InterviewQuestionService {
     private final PromptSanitizer promptSanitizer;
     private final ExecutorService questionExecutor;
     private final int followUpCount;
+    private final OpenAiChatOptions questionGenerationOptions = OpenAiChatOptions.builder()
+        .temperature(0.65)
+        .maxCompletionTokens(1200)
+        .extraBody(Map.of("enable_thinking", false))
+        .build();
 
     private record QuestionListDTO(List<QuestionDTO> questions) {}
 
@@ -105,7 +114,7 @@ public class InterviewQuestionService {
         this.resumeSystemPromptTemplate = loadTemplate(resourceLoader, properties.getResumeQuestionSystemPromptPath());
         this.resumeUserPromptTemplate = loadTemplate(resourceLoader, properties.getResumeQuestionUserPromptPath());
         this.outputConverter = new BeanOutputConverter<>(QuestionListDTO.class);
-        this.followUpCount = Math.max(0, Math.min(properties.getFollowUpCount(), MAX_FOLLOW_UP_COUNT));
+        this.followUpCount = 0;
     }
 
     private static PromptTemplate loadTemplate(ResourceLoader loader, String location) throws IOException {
@@ -135,8 +144,8 @@ public class InterviewQuestionService {
         boolean hasResume = resumeText != null && !resumeText.isBlank();
         String historicalSection = buildHistoricalSection(historicalQuestions);
         if (!hasResume) {
-            return generateDirectionOnly(questionChatClient, skill, difficultyDesc, questionCount,
-                historicalSection);
+            return generateDirectionOnlyWithTimeout(questionChatClient, skill, difficultyDesc,
+                questionCount, historicalSection);
         }
 
         int resumeCount = Math.max(1, (int) Math.round(questionCount * RESUME_QUESTION_RATIO));
@@ -147,13 +156,13 @@ public class InterviewQuestionService {
 
         CompletableFuture<List<InterviewQuestionDTO>> resumeFuture = CompletableFuture.supplyAsync(
             () -> generateResumeQuestions(questionChatClient, resumeText, resumeCount, skill,
-                difficultyDesc, historicalSection),
-            questionExecutor);
+                difficultyDesc, historicalSection, jdText),
+            questionExecutor).orTimeout(QUESTION_GENERATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         CompletableFuture<List<InterviewQuestionDTO>> directionFuture = CompletableFuture.supplyAsync(
             () -> generateDirectionOnly(questionChatClient, skill, difficultyDesc, directionCount,
                 historicalSection),
-            questionExecutor);
+            questionExecutor).orTimeout(QUESTION_GENERATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         List<InterviewQuestionDTO> resumeQuestions;
         List<InterviewQuestionDTO> directionQuestions;
@@ -162,8 +171,7 @@ public class InterviewQuestionService {
         } catch (CompletionException e) {
             log.error("简历题生成失败，降级为全方向题", e.getCause());
             directionFuture.cancel(true);
-            return generateDirectionOnly(questionChatClient, skill, difficultyDesc, questionCount,
-                historicalSection);
+            return generateFallbackQuestions(skill, questionCount);
         }
 
         try {
@@ -187,9 +195,96 @@ public class InterviewQuestionService {
         return merged;
     }
 
+    public List<InterviewQuestionDTO> generateResumeQuestionsForPreparation(
+            String llmProvider,
+            String resumeText,
+            int questionCount) {
+        SkillDTO skill = resolveSkill(resolveResumeSkill(resumeText), null, null);
+        List<InterviewQuestionDTO> generated = generateResumeQuestions(
+            llmProviderRegistry.getPlainChatClient(llmProvider),
+            resumeText,
+            questionCount,
+            skill,
+            resolveDifficulty(InterviewDefaults.DIFFICULTY),
+            "暂无历史提问",
+            "");
+        return reindexMainQuestions(generated, questionCount);
+    }
+
+    public List<InterviewQuestionDTO> generateJobMatchedResumeQuestions(
+            String llmProvider,
+            String resumeText,
+            String jobDescription,
+            int questionCount,
+            List<HistoricalQuestion> historicalQuestions) {
+        SkillDTO skill = resolveSkill(
+            resolveResumeSkill(resumeText + "\n" + jobDescription),
+            null,
+            null);
+        List<InterviewQuestionDTO> generated = generateResumeQuestions(
+            llmProviderRegistry.getPlainChatClient(llmProvider),
+            resumeText,
+            questionCount,
+            skill,
+            resolveDifficulty(InterviewDefaults.DIFFICULTY),
+            buildHistoricalSection(historicalQuestions),
+            jobDescription);
+        return reindexMainQuestions(generated, questionCount);
+    }
+
+    private List<InterviewQuestionDTO> reindexMainQuestions(
+            List<InterviewQuestionDTO> generated,
+            int questionCount) {
+        List<InterviewQuestionDTO> mainQuestions = generated.stream()
+            .filter(question -> !question.isFollowUp())
+            .limit(questionCount)
+            .toList();
+        List<InterviewQuestionDTO> reindexed = new ArrayList<>();
+        for (int index = 0; index < mainQuestions.size(); index++) {
+            InterviewQuestionDTO question = mainQuestions.get(index);
+            reindexed.add(InterviewQuestionDTO.create(
+                index,
+                question.question(),
+                question.type(),
+                question.category(),
+                question.topicSummary(),
+                false,
+                null));
+        }
+        return reindexed;
+    }
+
+    private String resolveResumeSkill(String resumeText) {
+        String normalized = resumeText == null ? "" : resumeText.toLowerCase();
+        if (normalized.contains("python") || normalized.contains("django")) return "python-backend";
+        if (normalized.contains("react") || normalized.contains("vue")
+                || normalized.contains("前端")) return "frontend";
+        if (normalized.contains("agent") || normalized.contains("llm")
+                || normalized.contains("大模型")) return "ai-agent-dev";
+        return "java-backend";
+    }
+
+    private List<InterviewQuestionDTO> generateDirectionOnlyWithTimeout(
+            ChatClient questionChatClient, SkillDTO skill, String difficultyDesc,
+            int questionCount, String historicalSection) {
+        try {
+            return CompletableFuture.supplyAsync(
+                    () -> generateDirectionOnly(questionChatClient, skill, difficultyDesc,
+                        questionCount, historicalSection),
+                    questionExecutor)
+                .orTimeout(QUESTION_GENERATION_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .join();
+        } catch (CompletionException e) {
+            log.error("方向题生成超时或失败，回退到默认问题: skill={}, questionCount={}",
+                skill.id(), questionCount, e);
+            return generateFallbackQuestions(skill, questionCount);
+        }
+    }
+
     private List<InterviewQuestionDTO> generateResumeQuestions(
             ChatClient questionClient, String resumeText, int questionCount,
-            SkillDTO skill, String difficultyDesc, String historicalSection) {
+            SkillDTO skill, String difficultyDesc, String historicalSection,
+            String jobDescription) {
         try {
             Map<String, Object> variables = new HashMap<>();
             variables.put("questionCount", questionCount);
@@ -198,15 +293,19 @@ public class InterviewQuestionService {
             variables.put("skillDescription", skill.description() != null ? skill.description() : "");
             variables.put("difficultyDescription", difficultyDesc);
             variables.put("resumeText", resumeText);
+            variables.put("jobDescription", jobDescription == null ? "" : jobDescription);
             variables.put("historicalSection", historicalSection);
+            variables.put("variationFocus", selectVariationFocus());
+            variables.put("generationNonce", UUID.randomUUID().toString());
 
             String systemPrompt = resumeSystemPromptTemplate.render()
                 + buildSkillPersonaSection(skill)
                 + "\n\n" + outputConverter.getFormat();
             String userPrompt = resumeUserPromptTemplate.render(variables);
 
-            QuestionListDTO dto = structuredOutputInvoker.invoke(
+            QuestionListDTO dto = structuredOutputInvoker.invokeOnce(
                 questionClient, systemPrompt, userPrompt, outputConverter,
+                questionGenerationOptions,
                 ErrorCode.INTERVIEW_QUESTION_GENERATION_FAILED,
                 "简历题生成失败：", "简历题", log);
 
@@ -221,6 +320,17 @@ public class InterviewQuestionService {
             log.error("简历题生成异常: {}", e.getMessage(), e);
             throw e;
         }
+    }
+
+    private String selectVariationFocus() {
+        List<String> focuses = List.of(
+            "优先考察候选人在项目中的亲自贡献与职责边界",
+            "优先考察技术选型的理由、替代方案与取舍",
+            "优先考察性能瓶颈、故障定位与优化过程",
+            "优先考察复杂边界条件、异常处理与可靠性设计",
+            "优先考察项目效果、可量化收益与复盘改进",
+            "优先考察岗位要求与候选人经历之间的真实匹配度");
+        return focuses.get(ThreadLocalRandom.current().nextInt(focuses.size()));
     }
 
     private List<InterviewQuestionDTO> generateDirectionOnly(
@@ -250,8 +360,9 @@ public class InterviewQuestionService {
                 + outputConverter.getFormat();
             String userPrompt = skillUserPromptTemplate.render(variables);
 
-            QuestionListDTO dto = structuredOutputInvoker.invoke(
+            QuestionListDTO dto = structuredOutputInvoker.invokeOnce(
                 questionClient, systemPrompt, userPrompt, outputConverter,
+                questionGenerationOptions,
                 ErrorCode.INTERVIEW_QUESTION_GENERATION_FAILED,
                 "方向题生成失败：", "方向题", log);
 

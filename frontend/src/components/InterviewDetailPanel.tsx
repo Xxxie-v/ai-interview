@@ -1,7 +1,10 @@
-import {useMemo, useState} from 'react';
+import {useState} from 'react';
 import {AnimatePresence, motion} from 'framer-motion';
-import {getScoreColor} from '../utils/score';
 import type {InterviewDetail} from '../api/history';
+import {
+  interviewReviewStatusClass,
+  interviewReviewStatusLabel,
+} from '../utils/interviewReviewStatus';
 
 interface InterviewDetailPanelProps {
   interview: InterviewDetail;
@@ -32,28 +35,25 @@ export default function InterviewDetailPanel({ interview }: InterviewDetailPanel
     });
   };
 
-  // 计算圆环进度
-  const { scorePercent, circumference, strokeDashoffset } = useMemo(() => {
-    const percent = interview.overallScore !== null ? (interview.overallScore / 100) * 100 : 0;
-    const circ = 2 * Math.PI * 54; // r=54
-    const offset = circ - (percent / 100) * circ;
-    return { scorePercent: percent, circumference: circ, strokeDashoffset: offset };
-  }, [interview.overallScore]);
-
   return (
       <motion.div
       className="space-y-6"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
     >
-      {/* 评分卡片 */}
-        <ScoreCard
-        score={interview.overallScore}
-        feedback={interview.overallFeedback}
-        scorePercent={scorePercent}
-        circumference={circumference}
-        strokeDashoffset={strokeDashoffset}
-      />
+      <div className="rounded-2xl bg-white p-6 shadow-sm dark:bg-slate-800">
+        <p className="text-sm text-slate-500 dark:text-slate-400">面试状态</p>
+        <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-sm font-semibold ${
+          interviewReviewStatusClass[interview.status]
+        }`}>
+          {interviewReviewStatusLabel[interview.status]}
+        </span>
+        {interview.overallFeedback && (
+          <p className="mt-4 text-slate-700 dark:text-slate-300">
+            {interview.overallFeedback}
+          </p>
+        )}
+      </div>
 
       {/* 表现优势 */}
       {interview.strengths && interview.strengths.length > 0 && (
@@ -72,70 +72,6 @@ export default function InterviewDetailPanel({ interview }: InterviewDetailPanel
         toggleQuestion={toggleQuestion}
       />
     </motion.div>
-  );
-}
-
-// 评分卡片组件
-function ScoreCard({
-  score,
-  feedback,
-  // scorePercent, // 暂时未使用
-  circumference,
-  strokeDashoffset
-}: {
-  score: number | null;
-  feedback: string | null;
-  scorePercent: number;
-  circumference: number;
-  strokeDashoffset: number;
-}) {
-  return (
-    <div className="bg-gradient-to-br from-violet-600 via-purple-600 to-indigo-700 rounded-2xl p-8 text-white">
-      <div className="flex flex-col items-center text-center">
-        {/* 圆环进度条 */}
-        <div className="relative w-32 h-32 mb-6">
-          <svg className="w-32 h-32 transform -rotate-90" viewBox="0 0 120 120">
-            <circle
-              cx="60"
-              cy="60"
-              r="54"
-              stroke="rgba(255,255,255,0.2)"
-              strokeWidth="8"
-              fill="none"
-            />
-            <motion.circle
-              cx="60"
-              cy="60"
-              r="54"
-              stroke="white"
-              strokeWidth="8"
-              fill="none"
-              strokeLinecap="round"
-              strokeDasharray={circumference}
-              initial={{ strokeDashoffset: circumference }}
-              animate={{ strokeDashoffset }}
-              transition={{ duration: 1.5, ease: "easeOut" }}
-            />
-          </svg>
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <motion.span
-              className="text-4xl font-bold"
-              initial={{ opacity: 0, scale: 0.5 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: 0.5 }}
-            >
-              {score ?? '-'}
-            </motion.span>
-            <span className="text-sm text-white/70">总分</span>
-          </div>
-        </div>
-
-        <h3 className="text-2xl font-bold mb-3">面试评估</h3>
-        <p className="text-white/90 max-w-2xl leading-relaxed">
-          {feedback || '表现良好，展示了扎实的技术基础。'}
-        </p>
-      </div>
-    </div>
   );
 }
 
@@ -262,9 +198,6 @@ function QuestionCard({
           <span
               className="px-3 py-1 bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 text-xs font-medium rounded-full">
             {answer.category || '综合'}
-          </span>
-          <span className={`font-semibold ${getScoreColor(answer.score, [80, 60])}`}>
-            得分: {answer.score}
           </span>
         </div>
           <motion.svg

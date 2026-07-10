@@ -9,6 +9,9 @@ export interface InterviewSession {
   currentQuestionIndex: number;
   questions: InterviewQuestion[];
   status: 'CREATED' | 'IN_PROGRESS' | 'COMPLETED' | 'EVALUATED';
+  webSocketPath: string;
+  questionPrepareStatus: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  questionPrepareError: string | null;
 }
 
 export interface InterviewQuestion {
@@ -19,6 +22,8 @@ export interface InterviewQuestion {
   userAnswer: string | null;
   score: number | null;
   feedback: string | null;
+  isFollowUp: boolean;
+  parentQuestionIndex: number | null;
 }
 
 export interface CreateInterviewRequest {
@@ -31,6 +36,8 @@ export interface CreateInterviewRequest {
   difficulty?: string;
   customCategories?: CategoryDTO[];
   jdText?: string;
+  officialInterview?: boolean;
+  jobId?: number;
 }
 
 export interface SubmitAnswerRequest {
@@ -50,6 +57,22 @@ export interface CurrentQuestionResponse {
   completed: boolean;
   question?: InterviewQuestion;
   message?: string;
+}
+
+export type InterviewFlowStatus =
+  | 'INIT'
+  | 'DEVICE_CHECK'
+  | 'READY'
+  | 'QUESTIONING'
+  | 'ANSWERING'
+  | 'EVALUATING'
+  | 'PAUSED'
+  | 'FINISHED'
+  | 'TERMINATED';
+
+export interface InterviewFlowStatusResponse {
+  sessionId: string;
+  status: InterviewFlowStatus;
 }
 
 export interface InterviewReport {
