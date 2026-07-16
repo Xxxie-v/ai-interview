@@ -97,12 +97,13 @@ public class VoiceEvaluateStreamConsumer extends AbstractStreamConsumer<VoiceEva
     }
 
     @Override
-    protected void retryMessage(VoiceEvaluatePayload payload, int retryCount) {
+    protected void retryMessage(VoiceEvaluatePayload payload, int retryCount, String taskId) {
         String sessionId = payload.sessionId();
         try {
             Map<String, String> message = Map.of(
                 AsyncTaskStreamConstants.FIELD_VOICE_SESSION_ID, sessionId,
-                AsyncTaskStreamConstants.FIELD_RETRY_COUNT, String.valueOf(retryCount)
+                AsyncTaskStreamConstants.FIELD_RETRY_COUNT, String.valueOf(retryCount),
+                AsyncTaskStreamConstants.FIELD_TASK_ID, taskId
             );
 
             redisService().streamAdd(

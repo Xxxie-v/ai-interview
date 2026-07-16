@@ -16,6 +16,8 @@ import java.util.Optional;
 @Repository
 public interface VoiceInterviewSessionRepository extends JpaRepository<VoiceInterviewSessionEntity, Long> {
 
+    Optional<VoiceInterviewSessionEntity> findByIdAndUserId(Long id, String userId);
+
     /**
      * 根据用户ID查找所有会话，按开始时间倒序
      */

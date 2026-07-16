@@ -14,6 +14,7 @@ import interview.guide.modules.voiceinterview.dto.VoiceInterviewMessageDTO;
 import interview.guide.modules.voiceinterview.model.VoiceInterviewSessionEntity;
 import interview.guide.modules.voiceinterview.service.VoiceInterviewEvaluationService;
 import interview.guide.modules.voiceinterview.service.VoiceInterviewService;
+import interview.guide.modules.auth.security.AuthPrincipal;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 
 import java.util.List;
 import java.util.Map;
@@ -54,16 +57,20 @@ public class VoiceInterviewController {
      * Create a new voice interview session
      */
     @PostMapping("/sessions")
-    public Result<SessionResponseDTO> createSession(@Valid @RequestBody CreateSessionRequest request) {
-        log.info("Creating voice interview session for role: {}", request.getRoleType());
-        SessionResponseDTO session = voiceInterviewService.createSession(request);
-        return Result.success(session);
+    @PreAuthorize("hasRole('INTERVIEWEE')")
+    public Result<SessionResponseDTO> createSession(
+        @Valid @RequestBody CreateSessionRequest request,
+        @AuthenticationPrincipal AuthPrincipal principal) {
+        throw new BusinessException(
+            ErrorCode.FORBIDDEN,
+            "模拟面试功能已下线，请从岗位列表参加正式面试");
     }
 
     /**
      * Get session details by ID
      */
     @GetMapping("/sessions/{sessionId}")
+    @PreAuthorize("@interviewPermission.canViewVoice(#sessionId, authentication)")
     public Result<SessionResponseDTO> getSession(@PathVariable Long sessionId) {
         log.info("Getting session details for: {}", sessionId);
         SessionResponseDTO session = voiceInterviewService.getSessionDTO(sessionId);
@@ -80,6 +87,7 @@ public class VoiceInterviewController {
      * </p>
      */
     @PostMapping("/sessions/{sessionId}/end")
+    @PreAuthorize("hasRole('INTERVIEWEE') and @interviewPermission.isVoiceOwner(#sessionId, authentication)")
     public Result<Void> endSession(@PathVariable Long sessionId) {
         log.info("Ending session: {}", sessionId);
         voiceInterviewService.endSession(sessionId.toString());
@@ -90,6 +98,7 @@ public class VoiceInterviewController {
      * Pause interview session
      */
     @PutMapping("/sessions/{sessionId}/pause")
+    @PreAuthorize("hasRole('INTERVIEWEE') and @interviewPermission.isVoiceOwner(#sessionId, authentication)")
     public Result<Void> pauseSession(
         @PathVariable Long sessionId,
         @RequestBody Map<String, String> request
@@ -104,6 +113,7 @@ public class VoiceInterviewController {
      * Resume interview session
      */
     @PutMapping("/sessions/{sessionId}/resume")
+    @PreAuthorize("hasRole('INTERVIEWEE') and @interviewPermission.isVoiceOwner(#sessionId, authentication)")
     public Result<SessionResponseDTO> resumeSession(@PathVariable Long sessionId) {
         log.info("Resuming session: {}", sessionId);
         SessionResponseDTO session = voiceInterviewService.resumeSession(sessionId.toString());
@@ -114,12 +124,15 @@ public class VoiceInterviewController {
      * Get all sessions for user
      */
     @GetMapping("/sessions")
+    @PreAuthorize("hasRole('INTERVIEWEE')")
     public Result<List<SessionMetaDTO>> getAllSessions(
         @RequestParam(required = false) String userId,
-        @RequestParam(required = false) String status
+        @RequestParam(required = false) String status,
+        @AuthenticationPrincipal AuthPrincipal principal
     ) {
-        log.info("Getting sessions for user: {}, status: {}", userId, status);
-        List<SessionMetaDTO> sessions = voiceInterviewService.getAllSessions(userId, status);
+        log.info("Getting voice sessions: userId={}, status={}", principal.id(), status);
+        List<SessionMetaDTO> sessions = voiceInterviewService.getAllSessions(
+            String.valueOf(principal.id()), status);
         return Result.success(sessions);
     }
 
@@ -127,6 +140,7 @@ public class VoiceInterviewController {
      * 删除语音面试会话
      */
     @DeleteMapping("/sessions/{sessionId}")
+    @PreAuthorize("hasRole('INTERVIEWEE') and @interviewPermission.isVoiceOwner(#sessionId, authentication)")
     public Result<Void> deleteSession(@PathVariable Long sessionId) {
         log.info("Deleting voice interview session: {}", sessionId);
         voiceInterviewService.deleteSession(sessionId);
@@ -137,6 +151,7 @@ public class VoiceInterviewController {
      * Get conversation history for a session
      */
     @GetMapping("/sessions/{sessionId}/messages")
+    @PreAuthorize("@interviewPermission.canViewVoice(#sessionId, authentication)")
     public Result<List<VoiceInterviewMessageDTO>> getMessages(@PathVariable Long sessionId) {
         log.info("Getting messages for session: {}", sessionId);
         List<VoiceInterviewMessageDTO> messages =
@@ -153,6 +168,7 @@ public class VoiceInterviewController {
      * </p>
      */
     @GetMapping("/sessions/{sessionId}/evaluation")
+    @PreAuthorize("@interviewPermission.canViewVoice(#sessionId, authentication)")
     public Result<VoiceEvaluationStatusDTO> getEvaluation(@PathVariable Long sessionId) {
         log.info("Getting evaluation status for session: {}", sessionId);
 
@@ -183,6 +199,7 @@ public class VoiceInterviewController {
      * </p>
      */
     @PostMapping("/sessions/{sessionId}/evaluation")
+    @PreAuthorize("hasRole('INTERVIEWEE') and @interviewPermission.isVoiceOwner(#sessionId, authentication)")
     public Result<VoiceEvaluationStatusDTO> generateEvaluation(@PathVariable Long sessionId) {
         log.info("Triggering async evaluation for session: {}", sessionId);
 

@@ -22,6 +22,7 @@ public class VoiceInterviewProperties {
     private AudioConfig audio = new AudioConfig();
     private QwenConfig qwen = new QwenConfig();
     private OpeningConfig opening = new OpeningConfig();
+    private SpeechConfig speech = new SpeechConfig();
 
     /**
      * 语音面试单轮面试官回复最大字符数（超出会截断到句子边界）。
@@ -147,6 +148,22 @@ public class VoiceInterviewProperties {
         private String languageType = "Chinese";
         private float speechRate = 1.0f;
         private int volume = 60;
+    }
+
+    @Data
+    public static class SpeechConfig {
+        private String asrProvider = "mock";
+        private String ttsProvider = "mock";
+        private MockSpeechConfig mock = new MockSpeechConfig();
+    }
+
+    @Data
+    public static class MockSpeechConfig {
+        private String transcript = "这是本地模拟语音识别结果，请结合当前问题继续面试。";
+        private int sampleRate = 16000;
+        private int silenceDurationMs = 800;
+        private int energyThreshold = 500;
+        private int ttsSampleRate = 24000;
     }
 
     @Data

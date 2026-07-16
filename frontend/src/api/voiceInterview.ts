@@ -246,7 +246,12 @@ export class VoiceInterviewWebSocket {
    */
   connect(): void {
     try {
-      this.ws = new WebSocket(this.url);
+      const token = getAccessToken();
+      const separator = this.url.includes('?') ? '&' : '?';
+      const authenticatedUrl = token
+        ? `${this.url}${separator}access_token=${encodeURIComponent(token)}`
+        : this.url;
+      this.ws = new WebSocket(authenticatedUrl);
 
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
@@ -389,3 +394,4 @@ export function connectWebSocket(
 }
 
 export default voiceInterviewApi;
+import { getAccessToken } from '../utils/authStorage';

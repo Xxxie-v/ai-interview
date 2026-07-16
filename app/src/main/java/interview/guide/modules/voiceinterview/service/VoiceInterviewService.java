@@ -66,13 +66,18 @@ public class VoiceInterviewService {
      */
     @Transactional
     public SessionResponseDTO createSession(CreateSessionRequest request) {
+        return createSession(request, DEFAULT_USER_ID);
+    }
+
+    @Transactional
+    public SessionResponseDTO createSession(CreateSessionRequest request, String userId) {
         String effectiveSkillId = request.getSkillId() != null ? request.getSkillId() : InterviewDefaults.SKILL_ID;
         String effectiveLlmProvider = (request.getLlmProvider() != null && !request.getLlmProvider().isBlank())
             ? request.getLlmProvider()
             : null;
 
         VoiceInterviewSessionEntity session = VoiceInterviewSessionEntity.builder()
-                .userId(DEFAULT_USER_ID)
+                .userId(userId)
                 .roleType(effectiveSkillId)
                 .skillId(effectiveSkillId)
                 .difficulty(request.getDifficulty() != null ? request.getDifficulty() : InterviewDefaults.DIFFICULTY)
@@ -534,7 +539,7 @@ public class VoiceInterviewService {
                 .status(session.getStatus().name())
                 .startTime(session.getStartTime())
                 .plannedDuration(session.getPlannedDuration())
-                .webSocketUrl(String.format("ws://localhost:8080/ws/voice-interview/%d", session.getId()))
+                .webSocketUrl(String.format("/ws/voice-interview/%d", session.getId()))
                 .build();
     }
 

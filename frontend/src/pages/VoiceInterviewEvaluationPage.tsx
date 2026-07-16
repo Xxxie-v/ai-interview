@@ -110,7 +110,7 @@ export default function VoiceInterviewEvaluationPage() {
       id: 0,
       sessionId: sessionId!,
       totalQuestions: evaluation.totalQuestions,
-      status: 'COMPLETED',
+      status: 'UNDER_MANUAL_REVIEW',
       overallScore: evaluation.overallScore,
       overallFeedback: evaluation.overallFeedback,
       createdAt: '',

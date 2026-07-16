@@ -6,6 +6,8 @@ import com.alibaba.dashscope.audio.qwen_tts_realtime.QwenTtsRealtimeCallback;
 import com.alibaba.dashscope.audio.qwen_tts_realtime.QwenTtsRealtimeConfig;
 import com.alibaba.dashscope.audio.qwen_tts_realtime.QwenTtsRealtimeParam;
 import com.google.gson.JsonObject;
+import interview.guide.common.exception.BusinessException;
+import interview.guide.common.exception.ErrorCode;
 import interview.guide.modules.voiceinterview.config.VoiceInterviewProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -93,7 +95,8 @@ public class QwenTtsService {
     @PostConstruct
     public void init() {
         if (apiKey == null || apiKey.trim().isEmpty()) {
-            throw new IllegalStateException("API key must be configured before initializing QwenTtsService");
+            log.info("Qwen TTS is not configured; another speech Provider can be used");
+            return;
         }
         log.info("QwenTtsService initialized with model: {}, voice: {}, sampleRate: {}Hz",
                  model, voice, sampleRate);
@@ -117,6 +120,9 @@ public class QwenTtsService {
         if (text == null || text.trim().isEmpty()) {
             log.debug("Empty or null text provided, returning empty audio array");
             return new byte[0];
+        }
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new BusinessException(ErrorCode.AI_API_KEY_INVALID, "Qwen TTS API Key 未配置");
         }
 
         log.debug("Starting TTS synthesis for text: {} characters", text.length());

@@ -59,8 +59,7 @@ public class VoiceInterviewSessionEntity {
     private Boolean hrEnabled = true;
 
     @Column(name = "llm_provider", length = 50)
-    @Builder.Default
-    private String llmProvider = "dashscope";
+    private String llmProvider;
 
     @Column(name = "current_phase")
     @Enumerated(EnumType.STRING)

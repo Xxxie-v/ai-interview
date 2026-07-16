@@ -9,6 +9,8 @@ import com.alibaba.dashscope.audio.omni.OmniRealtimeTranscriptionParam;
 import com.alibaba.dashscope.exception.NoApiKeyException;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import interview.guide.common.exception.BusinessException;
+import interview.guide.common.exception.ErrorCode;
 import interview.guide.modules.voiceinterview.config.VoiceInterviewProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -115,7 +117,8 @@ public class QwenAsrService {
     @PostConstruct
     public void init() {
         if (apiKey == null || apiKey.trim().isEmpty()) {
-            throw new IllegalStateException("API key must be configured before initializing QwenAsrService");
+            log.info("Qwen ASR is not configured; another speech Provider can be used");
+            return;
         }
         log.info("QwenAsrService initialized with model: {}, url: {}", model, url);
     }
@@ -198,6 +201,9 @@ public class QwenAsrService {
             Consumer<String> onFinal,
             Consumer<String> onPartial,
             Consumer<Throwable> onError) {
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new BusinessException(ErrorCode.AI_API_KEY_INVALID, "Qwen ASR API Key 未配置");
+        }
         if (sessions.containsKey(sessionId)) {
             throw new IllegalStateException("Session already exists: " + sessionId);
         }

@@ -8,9 +8,9 @@ import interview.guide.modules.voiceinterview.dto.WebSocketSubtitleMessage;
 import interview.guide.modules.voiceinterview.model.VoiceInterviewMessageEntity;
 import interview.guide.modules.voiceinterview.model.VoiceInterviewSessionEntity;
 import interview.guide.modules.voiceinterview.config.VoiceInterviewProperties;
-import interview.guide.modules.voiceinterview.service.QwenAsrService;
-import interview.guide.modules.voiceinterview.service.QwenTtsService;
-import interview.guide.modules.voiceinterview.service.DashscopeLlmService;
+import interview.guide.modules.voiceinterview.speech.SpeechRecognitionService;
+import interview.guide.modules.voiceinterview.speech.SpeechSynthesisService;
+import interview.guide.modules.voiceinterview.service.VoiceInterviewLlmService;
 import interview.guide.modules.voiceinterview.service.VoiceInterviewService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -56,9 +56,9 @@ import java.util.concurrent.atomic.AtomicReference;
 public class VoiceInterviewWebSocketHandler extends TextWebSocketHandler implements DisposableBean {
 
     private final ObjectMapper objectMapper;
-    private final QwenAsrService sttService;
-    private final QwenTtsService ttsService;
-    private final DashscopeLlmService llmService;
+    private final SpeechRecognitionService sttService;
+    private final SpeechSynthesisService ttsService;
+    private final VoiceInterviewLlmService llmService;
     private final VoiceInterviewService interviewService;
     private final VoiceInterviewProperties voiceInterviewProperties;
     private final ObjectProvider<MeterRegistry> meterRegistryProvider;
@@ -1100,8 +1100,7 @@ public class VoiceInterviewWebSocketHandler extends TextWebSocketHandler impleme
      * @return WAV formatted audio data
      */
     private byte[] convertPcmToWav(byte[] pcmData) {
-        // Use 24000Hz for Qwen TTS Realtime API
-        int sampleRate = 24000;
+        int sampleRate = ttsService.sampleRate();
         int bitsPerSample = 16;
         int numChannels = 1;
         int byteRate = sampleRate * numChannels * bitsPerSample / 8;
