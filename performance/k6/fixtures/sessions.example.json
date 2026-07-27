@@ -1,0 +1,9 @@
+[
+  {
+    "sessionId": "replace-with-prepared-session-id-1",
+    "questionIndex": 0,
+    "answer": "我会先明确业务指标，再通过监控数据验证方案效果和边界。",
+    "chunkIndex": 10000,
+    "durationMs": 10000
+  }
+]

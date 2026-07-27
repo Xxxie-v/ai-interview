@@ -1,0 +1,106 @@
+name: Performance test
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Test scenario
+        required: true
+        default: readonly
+        type: choice
+        options:
+          - readonly
+          - interview-submit
+          - video-upload
+      virtual_users:
+        description: Concurrent virtual users
+        required: true
+        default: "10"
+        type: string
+      duration:
+        description: Read-only test duration, such as 30s or 2m
+        required: true
+        default: 30s
+        type: string
+      confirm_write:
+        description: I confirm write scenarios target an isolated test environment
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  k6:
+    name: k6 ${{ inputs.scenario }}
+    runs-on: ubuntu-latest
+    environment: performance
+    env:
+      PERF_BASE_URL: ${{ vars.K6_BASE_URL }}
+      PERF_USERNAME: ${{ secrets.K6_USERNAME }}
+      PERF_PASSWORD: ${{ secrets.K6_PASSWORD }}
+      PERF_SESSION_FIXTURES_JSON: ${{ secrets.K6_SESSION_FIXTURES_JSON }}
+      PERF_VUS: ${{ inputs.virtual_users }}
+      PERF_DURATION: ${{ inputs.duration }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate performance-test configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PERF_BASE_URL"
+          test -n "$PERF_USERNAME"
+          test -n "$PERF_PASSWORD"
+          case "$PERF_BASE_URL" in
+            http://*|https://*) ;;
+            *) echo "K6_BASE_URL must start with http:// or https://"; exit 1 ;;
+          esac
+          if [[ "${{ inputs.scenario }}" != "readonly" && "${{ inputs.confirm_write }}" != "true" ]]; then
+            echo "Write scenarios require confirm_write=true"
+            exit 1
+          fi
+      - name: Prepare write-scenario fixtures
+        if: inputs.scenario != 'readonly'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PERF_SESSION_FIXTURES_JSON"
+          printf '%s' "$PERF_SESSION_FIXTURES_JSON" > performance/k6/fixtures/sessions.local.json
+      - name: Select scenario
+        id: scenario
+        shell: bash
+        run: |
+          case "${{ inputs.scenario }}" in
+            readonly) echo "script=performance/k6/readonly.js" >> "$GITHUB_OUTPUT" ;;
+            interview-submit) echo "script=performance/k6/interview-submit.js" >> "$GITHUB_OUTPUT" ;;
+            video-upload) echo "script=performance/k6/video-upload.js" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: Run k6
+        shell: bash
+        env:
+          PERF_ALLOW_WRITES: ${{ inputs.confirm_write }}
+          PERF_FIXTURE_FILE: ./fixtures/sessions.local.json
+        run: |
+          mkdir -p performance-results
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD:/work" \
+            -w /work \
+            grafana/k6:2.0.0 run \
+            -e "PERF_BASE_URL=$PERF_BASE_URL" \
+            -e "PERF_USERNAME=$PERF_USERNAME" \
+            -e "PERF_PASSWORD=$PERF_PASSWORD" \
+            -e "PERF_VUS=$PERF_VUS" \
+            -e "PERF_DURATION=$PERF_DURATION" \
+            -e "PERF_ALLOW_WRITES=$PERF_ALLOW_WRITES" \
+            -e "PERF_FIXTURE_FILE=$PERF_FIXTURE_FILE" \
+            --summary-export=/work/performance-results/summary.json \
+            "${{ steps.scenario.outputs.script }}"
+      - name: Upload performance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-${{ inputs.scenario }}-${{ github.run_number }}
+          path: performance-results
+          if-no-files-found: warn

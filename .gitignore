@@ -1,24 +1,72 @@
-# Ignore Gradle project-specific cache directory
-.gradle
+# Gradle / Java build outputs
+.gradle/
+**/build/
+**/bin/
+**/out/
+*.class
+__pycache__/
+*.py[cod]
+*.hprof
+hs_err_pid*
 
-# Ignore Gradle build output directory
-build
-/.claude
-/.idea
-/app/bin
-# Environment variables
+# Frontend dependencies and build outputs
+**/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/.vite/
+*.tsbuildinfo
+
+# Environment variables and local configuration
 .env
+.env.*
+!.env.example
+!.env.production.example
+!**/.env.example
+!**/.env.*.example
+app/src/main/resources/application-dev.yml
+
+# Runtime data and uploaded files
+/data/
+/app/data/
+/uploads/
+/storage/
+/tmp/
+
+# Logs and local diagnostics
+*.log
+*.log.*
 test-output.txt
-# IDEA code analysis
+
+# Test and performance reports
+/performance-results/
+/performance/k6/fixtures/*.local.json
+**/test-results/
+**/playwright-report/
+**/blob-report/
+
+# Local model weights
+/models/vision/*.onnx
+
+# IDE and editor settings
+/.idea/
+/.vscode/
+*.iml
+*.ipr
+*.iws
 qodana.yaml
 
-app/src/main/resources/application-dev.yml
-/docs
-SETUP_API_KEYS.md
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
 
-# AI Assistant documentation
+# Local AI assistant state
+/.claude/
+/.codex/
+/.gemini/
+/.playwright-mcp/
+
+# Local-only assistant notes already present in older clones
 CLAUDE.md
 GEMINI.md
-
-# Playwright MCP
-.playwright-mcp/
+SETUP_API_KEYS.md
